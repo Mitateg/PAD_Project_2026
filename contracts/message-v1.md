@@ -27,15 +27,26 @@ Clasa C# corespunzatoare este `Pad.Common.Message` (src/common/Message.cs).
 ## HELLO (primul mesaj dupa conectare)
 
 ```json
-{"role":"sender","name":"sender-1"}
+{"role":"sender","name":"sender"}
 {"role":"receiver","name":"ion","subscribeTo":["Anunt"]}
 ```
 
-Pentru receiver, broker-ul raspunde cu numele unic pe care i l-a dat (cel mai mic numar liber):
+Broker-ul raspunde **si la sender, si la receiver** cu numele unic pe care i l-a dat.
+Numele cerut primeste cel mai mic numar liber: `ion` devine `ion-1`, iar daca `ion-1` este deja
+conectat, urmatorul devine `ion-2`. Numele se elibereaza la deconectare.
 
 ```json
 {"status":"ACK","assignedName":"ion-1"}
+{"status":"ACK","assignedName":"sender-2"}
 ```
+
+Diferenta dintre cele doua roluri:
+
+- la **receiver**, numele este si canalul lui privat, deci se foloseste la rutare;
+- la **sender**, numele conteaza doar in loguri, ca sa se vada cine a trimis fiecare mesaj.
+
+Daca broker-ul nu trimite acest raspuns intr-o secunda, sender-ul merge mai departe cu numele cerut,
+fara sa se blocheze.
 
 ## Raspunsuri broker (dupa fiecare mesaj de la sender)
 

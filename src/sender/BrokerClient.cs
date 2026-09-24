@@ -13,24 +13,35 @@ namespace Pad.Sender;
 /// </summary>
 public class BrokerClient : IDisposable
 {
+    /// <summary>Cat asteptam raspunsul broker-ului la HELLO, inainte sa mergem mai departe fara el.</summary>
+    private static readonly TimeSpan HelloReplyTimeout = TimeSpan.FromSeconds(1);
+
     private readonly string _host;
     private readonly int _port;
-    private readonly string _name;
-    private readonly Logger _log;
+    private readonly string _baseName;
+    private readonly Func<string, Logger> _createLogger;
+
+    // Se creeaza la prima conectare, dupa ce aflam numele primit de la broker.
+    // Pana atunci nu scriem nimic in log, deci nu se foloseste nicaieri inainte.
+    private Logger _log = null!;
 
     private Socket? _socket;
     private LineReader? _reader;
 
+    /// <summary>Numele dat de broker (ex. "sender-1"). Pana la prima conectare, numele cerut.</summary>
+    public string Name { get; private set; }
+
     /// <summary>Adresa broker-ului, doar pentru mesaje si loguri.</summary>
     private string Address => $"{_host}:{_port}";
 
-    public BrokerClient(string host, int port, string name, Logger log)
+    public BrokerClient(string host, int port, string baseName, Func<string, Logger> createLogger)
     {
         // Pastram host-ul ca text: poate fi IP ("127.0.0.1") sau nume ("broker", in Docker).
         _host = host;
         _port = port;
-        _name = name;
-        _log = log;
+        _baseName = baseName;
+        _createLogger = createLogger;
+        Name = baseName;
     }
 
     /// <summary>Creeaza socketul, se conecteaza si trimite HELLO.</summary>
@@ -48,10 +59,39 @@ public class BrokerClient : IDisposable
         _reader = new LineReader(_socket);
 
         // 3. Primul mesaj este obligatoriu HELLO: ii spunem broker-ului ca suntem sender.
-        var hello = new HelloMessage { Role = Constants.RoleSender, Name = _name };
+        var hello = new HelloMessage { Role = Constants.RoleSender, Name = _baseName };
         LineReader.WriteJson(_socket, hello);
 
-        _log.Info("connected", result: $"ok {Address}");
+        // 4. Broker-ul raspunde cu numele unic pe care ni l-a dat: "sender" -> "sender-1",
+        //    al doilea sender pornit devine "sender-2". Asa nu se amesteca in loguri.
+        Name = ReadAssignedName() ?? _baseName;
+
+        // Logul poarta numele primit. La o reconectare pastram acelasi fisier de log.
+        _log ??= _createLogger(Name);
+        _log.Info("connected", result: $"ok {Address} ca {Name}");
+    }
+
+    /// <summary>
+    /// Citeste raspunsul broker-ului la HELLO. Returneaza null daca broker-ul nu trimite nimic
+    /// intr-o secunda: in cazul asta mergem mai departe cu numele cerut, fara sa ne blocam.
+    /// </summary>
+    private string? ReadAssignedName()
+    {
+        int previousTimeout = _socket!.ReceiveTimeout;
+        _socket.ReceiveTimeout = (int)HelloReplyTimeout.TotalMilliseconds;
+        try
+        {
+            string? line = _reader!.ReadLine();
+            return line is null ? null : Json.TryDeserialize<BrokerReply>(line)?.AssignedName;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+        {
+            return null;
+        }
+        finally
+        {
+            _socket.ReceiveTimeout = previousTimeout;
+        }
     }
 
     /// <summary>

@@ -1,0 +1,8 @@
+# Ce NU se copiaza in imagine (build mai rapid si imagine curata).
+**/bin/
+**/obj/
+logs/
+.git/
+.vs/
+.idea/
+*.user

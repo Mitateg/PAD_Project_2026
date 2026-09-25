@@ -17,7 +17,11 @@ public class SenderOptions
     /// </summary>
     public string Host { get; set; } = Environment.GetEnvironmentVariable("PAD_BROKER_HOST") ?? "127.0.0.1";
     public int Port { get; set; } = Constants.BrokerPort;
-    public string Name { get; set; } = "sender-1";
+    /// <summary>
+    /// Numele cerut. Broker-ul ii adauga un numar ca sa fie unic: "sender" -> "sender-1",
+    /// al doilea sender pornit primeste "sender-2".
+    /// </summary>
+    public string Name { get; set; } = "sender";
 
     public static SenderOptions Parse(string[] args)
     {

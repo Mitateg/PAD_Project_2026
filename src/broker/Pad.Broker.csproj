@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- Broker (P2): asculta pe 4242 cu un Socket creat manual (Bind + Listen + Accept),
+       valideaza mesajele, le pune in cozi per messageType si le livreaza abonatilor. -->
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>Pad.Broker</RootNamespace>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\common\Pad.Common.csproj" />
+	</ItemGroup>
+
+</Project>

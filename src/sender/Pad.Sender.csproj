@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Sender (P1): construieste mesaje, le trimite broker-ului printr-un Socket creat manual
+       si asteapta ACK. Retry la timeout / conexiune pierduta. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Pad.Sender</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\common\Pad.Common.csproj" />
+  </ItemGroup>
+
+</Project>

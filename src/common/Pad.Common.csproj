@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Biblioteca comuna: clasa Message, constante, framing pe linii, logger.
+       Este referita de sender, broker si receiver. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Pad.Common</RootNamespace>
+  </PropertyGroup>
+
+</Project>

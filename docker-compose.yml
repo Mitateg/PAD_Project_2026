@@ -1,0 +1,59 @@
+# Fiecare serviciu are imaginea lui, construita din Dockerfile-ul propriu.
+#
+# Momentan aici este doar sender-ul (P1). Broker-ul (P2) si receiver-ul (P3) se adauga
+# de colegi, dupa modelul comentat mai jos, cand isi aduc codul pe dev.
+#
+# Comenzi:
+#   docker compose build sender      # construieste imaginea sender-ului
+#   docker compose run --rm sender   # porneste sender-ul, cu meniu interactiv
+
+services:
+  sender:
+    build:
+      # Contextul este radacina repo-ului, pentru ca sender-ul foloseste si src/common.
+      context: .
+      dockerfile: src/sender/Dockerfile
+    image: pad-sender
+    environment:
+      # In reteaua Docker, broker-ul se gaseste dupa numele serviciului.
+      PAD_BROKER_HOST: broker
+    # Sender-ul are meniu: are nevoie de STDIN deschis si de terminal.
+    stdin_open: true
+    tty: true
+    # Nu porneste la "docker compose up"; il pornesti cand vrei sa trimiti ceva.
+    profiles:
+      - interactiv
+    volumes:
+      # Logurile raman pe calculator, nu se pierd odata cu containerul.
+      - ./logs:/app/logs
+
+  # ---- De adaugat de colegi ----
+  #
+  # Serviciul broker-ului TREBUIE sa se numeasca "broker": sender-ul si receiver-ul
+  # il cauta dupa acest nume (vezi PAD_BROKER_HOST).
+  #
+  # broker:
+  #   build:
+  #     context: .
+  #     dockerfile: src/broker/Dockerfile
+  #   image: pad-broker
+  #   ports:
+  #     - "4242:4242"
+  #   volumes:
+  #     - ./logs:/app/logs
+  #
+  # receiver:
+  #   build:
+  #     context: .
+  #     dockerfile: src/receivers/Dockerfile
+  #   image: pad-receiver
+  #   environment:
+  #     PAD_BROKER_HOST: broker
+  #   depends_on:
+  #     - broker
+  #   stdin_open: true
+  #   tty: true
+  #   profiles:
+  #     - interactiv
+  #   volumes:
+  #     - ./logs:/app/logs

@@ -48,7 +48,7 @@ public class ClientHandler
 	private HelloMessage? ReadHello()
 	{
 		string? line = _reader.ReadLine();
-		if ( line == null)
+		if (line == null)
 			return null;
 
 		HelloMessage? hello = Json.TryDeserialize<HelloMessage>(line);
@@ -64,37 +64,49 @@ public class ClientHandler
 
 	private void RunSenderLoop(HelloMessage hello)
 	{
-		while (true)
+          // Inregistram senderul in BrokerState si ii dam un nume unic, pentru a putea rula concomitent 2 senderi
+          string assignedName = _state.RegisterSender(hello.Name);
+		LineReader.WriteJson(_socket, new BrokerReply { Status = Pad.Common.Constants.StatusAck, AssignedName = assignedName });
+		_log.Info("sender_connected", result: assignedName);
+
+		try
 		{
-			string? line = _reader.ReadLine();
-			if (line == null) break; // Senderul a inchis conexiunea
-
-               // Senderul poate cere lista de receptori conectati, pentru a alege unul
-               ControlMessage? control = Json.TryDeserialize<ControlMessage>(line);
-			if (control != null && control.Action == ControlMessage.ListReceivers)
+			while (true)
 			{
-				LineReader.WriteJson(_socket, new ReceiverListReply { Receivers = _state.ConnectedReceiverNames() });
-				continue;
+				string? line = _reader.ReadLine();
+				if (line == null) break; // Senderul a inchis conexiunea
+
+				// Senderul poate cere lista de receptori conectati, pentru a alege unul
+				ControlMessage? control = Json.TryDeserialize<ControlMessage>(line);
+				if (control != null && control.Action == ControlMessage.ListReceivers)
+				{
+					LineReader.WriteJson(_socket, new ReceiverListReply { Receivers = _state.ConnectedReceiverNames() });
+					continue;
+				}
+
+				var stopwatch = Stopwatch.StartNew();
+
+				// Un Json valid, dar care nu respecta schema de mesaj, va fi respins cu un nack
+				if (MessageValidator.TryParse(line, out Message? message, out string? reason, _state.KnownReceiverNames()))
+				{
+					_state.Enqueue(message!);
+					LineReader.WriteJson(_socket, BrokerReply.Ack(message!.MessageId));
+					_log.Info("message_received", message.CorrelationId, message.MessageId, message.MessageType, "ok", stopwatch.Elapsed);
+				}
+				else
+				{
+					// Incercam sa extragem messageId din mesajul invalid, pentru a putea trimite un nack corespunzator
+					string? messageId = Json.TryDeserialize<Message>(line)?.MessageId;
+					LineReader.WriteJson(_socket, BrokerReply.Nack(messageId, reason!));
+					_log.Warn("message_rejected", msg: messageId, result: $"nack reason={reason}", duration: stopwatch.Elapsed);
+				}
 			}
-
-			var stopwatch = Stopwatch.StartNew();
-
-               // Un Json valid, dar care nu respecta schema de mesaj, va fi respins cu un nack
-               if (MessageValidator.TryParse(line, out Message? message, out string? reason, _state.KnownReceiverNames()))
-			{
-				_state.Enqueue(message!);
-				LineReader.WriteJson(_socket, BrokerReply.Ack(message!.MessageId));
-				_log.Info("message_received", message.CorrelationId, message.MessageId, message.MessageType, "ok", stopwatch.Elapsed);
-               }
-			else
-			{
-                    // Incercam sa extragem messageId din mesajul invalid, pentru a putea trimite un nack corespunzator
-                    string? messageId = Json.TryDeserialize<Message>(line)?.MessageId;
-				LineReader.WriteJson(_socket, BrokerReply.Nack(messageId, reason!));
-				_log.Warn("message_rejected", msg: messageId, result: $"nack reason={reason}", duration: stopwatch.Elapsed);
-               }
+		}
+		finally
+		{
+			_state.RemoveSender(assignedName);
+               _log.Info("sender_disconnected", result: hello.Name);
           }
-		_log.Info("sender_disconnected", result: hello.Name);
      }
 
 	private void RunReceiverLoop(HelloMessage hello)

@@ -25,6 +25,10 @@ public class BrokerState
      // Toate numele de receptori cunoscuti, inclusiv cei deconectati
      private readonly HashSet<string> _knownNames = new();
 
+     // Numele senderilor conectati acum
+     private readonly HashSet<string> _senderNames = new();
+     private readonly object _senderLock = new();
+
      // Cate o coada pentru fiecare tip de mesaj
      public ConcurrentDictionary<string, ConcurrentQueue<QueuedMessage>> Queues = new();
 
@@ -71,6 +75,28 @@ public class BrokerState
           }
      }
 
+     // Da un nume unic, si adauga senderul in lista de receptori, ca sa nu sa se repete numele
+     public string RegisterSender(string baseName)
+     {
+          lock (_senderLock)
+          {
+               string assigned;
+               for(int i = 1; ; i++)
+               {
+                    assigned = $"{baseName}-{i}";
+                    if (!_senderNames.Contains(assigned))
+                         break;
+               }
+               _senderNames.Add(assigned);
+               return assigned;
+          }
+     }
+
+     public void RemoveSender(string assignedName)
+     {
+          lock (_senderLock) 
+               _senderNames.Remove(assignedName);
+     }
 
      // Returneaza lista de receptori cunoscuti, inclusiv cei deconectati
      public List<string> KnownReceiverNames()

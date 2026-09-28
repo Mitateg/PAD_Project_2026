@@ -57,13 +57,15 @@ public class MessageProcessor
         Console.WriteLine($">>> MESAJ NOU ({kind}) [{DateTime.Now:HH:mm:ss}]");
         Console.WriteLine(rawJson);
         Console.WriteLine("------------------------------------------------------------");
-        AfterMessageShown?.Invoke();
 
         File.AppendAllText(_processedFilePath, $"{message.MessageId} | {rawJson}{Environment.NewLine}");
 
         _processedIds.Add(message.MessageId);
         ProcessedCount++;
         _log.Info("message_processed", message.CorrelationId, message.MessageId, message.MessageType);
+
+        // Reafisam meniul abia acum, ca sa apara contorul deja actualizat.
+        AfterMessageShown?.Invoke();
         return true;
     }
 }

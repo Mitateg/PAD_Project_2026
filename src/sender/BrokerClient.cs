@@ -168,14 +168,28 @@ public class BrokerClient : IDisposable
     }
 
     /// <summary>Intreaba broker-ul ce receiveri sunt conectati acum.</summary>
+    /// <summary>
+    /// Intreaba broker-ul ce receiveri sunt conectati acum.
+    /// Daca broker-ul a picat intre timp, incearca o reconectare si returneaza lista goala
+    /// in loc sa arunce: aplicatia nu trebuie sa cada doar pentru ca a intrebat cine e conectat.
+    /// </summary>
     public List<string> ListReceivers()
     {
-        if (_socket is null || _reader is null)
-            throw new InvalidOperationException("Nu suntem conectati. Apeleaza Connect() intai.");
+        try
+        {
+            if (_socket is null || _reader is null)
+                throw new IOException("nu suntem conectati");
 
-        LineReader.WriteJson(_socket, new ControlMessage { Action = ControlMessage.ListReceivers });
-        string? replyLine = _reader.ReadLine() ?? throw new IOException("broker-ul a inchis conexiunea");
-        return Json.TryDeserialize<ReceiverListReply>(replyLine)?.Receivers ?? new List<string>();
+            LineReader.WriteJson(_socket, new ControlMessage { Action = ControlMessage.ListReceivers });
+            string? replyLine = _reader.ReadLine() ?? throw new IOException("broker-ul a inchis conexiunea");
+            return Json.TryDeserialize<ReceiverListReply>(replyLine)?.Receivers ?? new List<string>();
+        }
+        catch (Exception ex) when (ex is SocketException || ex is IOException)
+        {
+            _log.Warn("list_receivers_failed", result: ex.Message);
+            TryReconnect();
+            return new List<string>();
+        }
     }
 
     /// <summary>
@@ -189,8 +203,10 @@ public class BrokerClient : IDisposable
 
     private BrokerReply SendAndWaitReply(string line, string? messageId)
     {
+        // Aruncam IOException (nu InvalidOperationException), ca sa fie prinsa de retry-ul din
+        // SendWithRetry: daca broker-ul e picat si reconectarea a esuat, socketul e null aici.
         if (_socket is null || _reader is null)
-            throw new InvalidOperationException("Nu suntem conectati. Apeleaza Connect() intai.");
+            throw new IOException("nu suntem conectati la broker");
 
         LineReader.WriteLine(_socket, line);
 

@@ -161,7 +161,13 @@ public class BrokerConnection
 
         _log.Info("connected", result: $"as {AssignedName}, subscribed to [{string.Join(",", hello.SubscribeTo)}]");
         Console.WriteLine($"[conectat la broker] Numele tau este \"{AssignedName}\" (asa te alege sender-ul pentru un mesaj privat).");
+
+        bool isReconnect = _connectedOnce.IsSet;
         _connectedOnce.Set();
+
+        // La reconectare, meniul a ramas mai sus pe ecran: il reafisam noi.
+        if (isReconnect)
+            _processor.AfterMessageShown?.Invoke();
 
         while (true)
         {

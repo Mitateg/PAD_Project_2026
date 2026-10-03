@@ -42,18 +42,18 @@ services:
   #   volumes:
   #     - ./logs:/app/logs
   #
-  # receiver:
-  #   build:
-  #     context: .
-  #     dockerfile: src/receivers/Dockerfile
-  #   image: pad-receiver
-  #   environment:
-  #     PAD_BROKER_HOST: broker
-  #   depends_on:
-  #     - broker
-  #   stdin_open: true
-  #   tty: true
-  #   profiles:
-  #     - interactiv
-  #   volumes:
-  #     - ./logs:/app/logs
+    receiver:
+    build:
+      context: .
+      dockerfile: src/receivers/Dockerfile
+    image: pad-receiver
+    environment:
+      PAD_BROKER_HOST: broker
+    depends_on:
+      - broker
+    stdin_open: true
+    tty: true
+    profiles:
+      - interactiv
+    volumes:
+      - ./logs:/app/logs

@@ -14,11 +14,10 @@ public class ReceiverOptions
     /// <summary>False daca numele nu a fost dat prin --name; Program intreaba interactiv in acest caz.</summary>
     public bool NameGiven { get; private set; }
 
-    public string Host { get; set; } = "localhost";
+    public string Host { get; set; } = Environment.GetEnvironmentVariable("PAD_BROKER_HOST") ?? "localhost";
     public int Port { get; set; } = 4242;
 
     public List<string> Subscriptions { get; set; } = new();
-
     public bool Deduplicate { get; set; } = true;
     public bool CrashBeforeAck { get; set; }
 

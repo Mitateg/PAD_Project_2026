@@ -55,7 +55,8 @@ public class MessageProcessor
         Console.WriteLine();
         Console.WriteLine("------------------------------------------------------------");
         Console.WriteLine($">>> MESAJ NOU ({kind}) [{DateTime.Now:HH:mm:ss}]");
-        Console.WriteLine(rawJson);
+        string text = message.Payload.TryGetProperty("text", out var textProp) ? textProp.GetString() ?? "" : rawJson;
+        Console.WriteLine(text);
         Console.WriteLine("------------------------------------------------------------");
 
         File.AppendAllText(_processedFilePath, $"{message.MessageId} | {rawJson}{Environment.NewLine}");

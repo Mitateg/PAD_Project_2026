@@ -20,7 +20,7 @@ catch (Exception ex) when (ex is ArgumentException || ex is FormatException || e
 // Logul se creeaza dupa conectare, cu numele primit de la broker (ex. "sender-1"),
 // ca doi senderi porniti odata sa scrie in fisiere diferite.
 using var broker = new BrokerClient(options.Host, options.Port, options.Name,
-                                    assignedName => new Logger(assignedName));
+                                    assignedName => new Logger(assignedName, toConsole: false));
 
 // Asteptam broker-ul: daca nu ruleaza inca, reincercam pana porneste (Ctrl+C ca sa renunti).
 broker.ConnectWithWait();
@@ -100,14 +100,15 @@ void SendManual()
     SendAndShow(MessageFactory.FromText(destinations[index - 1], text));
 }
 
-// Afisam JSON-ul exact asa cum pleaca pe fir, apoi trimitem si asteptam ACK.
+// Trimitem mesajul si asteptam ACK. In consola aratam doar unde a plecat si rezultatul,
+// fara JSON-ul complet (acela ramane in logul sender-ului, daca e nevoie de el).
 void SendAndShow(Message message)
 {
     bool isPublic = Constants.KnownMessageTypes.Contains(message.MessageType);
     string destination = isPublic ? $"toti abonatii la {message.MessageType}" : $"\"{message.MessageType}\" (privat)";
 
     Console.WriteLine();
-    Console.WriteLine($"Trimit catre {destination}: " + Json.Serialize(message));
+    Console.WriteLine($"Trimit catre {destination}...");
 
     bool delivered = broker.SendWithRetry(message);
     Console.WriteLine(delivered ? "  -> ACK primit, mesajul este la broker." : "  -> NU s-a putut livra (vezi logul).");

@@ -143,7 +143,7 @@ public class MessageSave : IDisposable
 			{
 				string json = line.Substring(9);
 				Message? message = Json.TryDeserialize<Message>(json);
-				if (message == null || string.IsNullOrWhiteSpace(m.MessageId))
+				if (message == null || string.IsNullOrWhiteSpace(message.MessageId))
 				{
 					skipped++;
 					continue;

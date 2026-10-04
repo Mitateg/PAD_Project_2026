@@ -20,6 +20,8 @@ services:
     volumes:
       # Logurile (inclusiv deadletter.log) raman pe calculator.
       - ./logs:/app/logs
+      # WAL-ul brokerului (mesajele necomplet livrate) supravietuieste la kill / restart.
+      - ./data:/app/data
 
   sender:
     build:

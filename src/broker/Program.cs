@@ -5,7 +5,11 @@ using Pad.Broker;
 
 // Punct de intrare a brokerului, care accepta conexiuni de la clienti (senderi si receptori) si porneste un dispatcher pentru a livra mesajele catre receptori
 var log = new Logger("broker");
-var state = new BrokerState(log);
+var save = new MessageSave(Path.Combine("data", "broker.wal"), log);
+var state = new BrokerState(log, save);
+
+int recovered = state.Recover();
+log.Info("broker_recovered", result: $"recovered {recovered} messages from WAL");
 
 Socket listner = CreateListner(log);
 
@@ -21,7 +25,7 @@ while (true)
 
 static Socket CreateListner(Logger log)
 {
-    foreach (int port in new[] { Constants.BrokerPort, Constants.BrokerFallbackPort })
+     foreach (int port in new[] { Constants.BrokerPort, Constants.BrokerFallbackPort })
      {
           // Cream socketul TCP si il legam la portul dorit
           var listner = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -39,5 +43,5 @@ static Socket CreateListner(Logger log)
           }
      }
 
-    throw new InvalidOperationException("Could not bind to any port");
+     throw new InvalidOperationException("Could not bind to any port");
 }

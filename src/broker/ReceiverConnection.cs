@@ -4,7 +4,7 @@ using Pad.Common;
 
 namespace Pad.Broker;
 
-// 
+// Conexiunea broker-ului cu un receptor: socketul, abonarile, ACK-urile si coada lui proprie de livrare
 public class ReceiverConnection
 {
 	public string Name { get; }
@@ -14,8 +14,11 @@ public class ReceiverConnection
 	// ACK-urile venite de la receiver
 	public BlockingCollection<BrokerReply> Acks { get; } = new();
 
-	// Lock pentru a livra un singur mesaj o data la un receptor
-	public readonly object _deliveryLock = new();
+     // Mesajele de livrat catre ACEST receptor. Fiecare receptor are un thread propriu care o goleste
+	public BlockingCollection<Message> Outbox { get; } = new();
+
+     // Lock pentru a livra un singur mesaj o data la un receptor
+     public readonly object _deliveryLock = new();
 
 	public bool IsConnected { get; private set; } = true;
 

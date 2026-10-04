@@ -7,10 +7,80 @@ namespace Pad.Broker;
 public class QueuedMessage
 {
      public required Message Message { get; set; }
-     public int Attempts { get; set; }
 
-     // Numele receptorilor ce au confirmat deja, fiind ignorati la retrimitere
-     public HashSet<string> AckedBy { get; } = new();
+     // Cand a fost pus in coada, pentru a putea face retry dupa un timp
+     public DateTime EnqueuedAt { get; set; } = DateTime.UtcNow;
+
+     private readonly object _lock = new();
+
+     // Numele receptorilor care au confirmat deja, fiind ignorati la retrimitere
+     private readonly HashSet<string> _acked = new();
+
+     // Numele receptorilor care au renuntat la mesaj, fiind ignorati la retrimitere
+     private readonly HashSet<string> _gaveUp = new();
+
+     // Numele receptorilor care sunt in proces de livrare
+     private readonly HashSet<string> _inProcess = new();
+
+     private readonly Dictionary<string, int> _failures = new();
+
+     // La recuperare, se restaureaza lista de receptori care au confirmat deja, ca sa nu mai fie retrimisi
+     public void RestoreAck(string receiver)
+     {
+          lock (_lock)
+               _acked.Add(receiver);
+     }
+
+     // Daca receptorul a confirmat, il marcam ca acked, si nu mai incercam sa-l trimitem
+     public bool TryStartDelivery(string receiver)
+     {
+          lock (_lock)
+          {
+               if (_acked.Contains(receiver) || _gaveUp.Contains(receiver))
+                    return false;
+               return _inProcess.Add(receiver);
+          }
+     }
+
+     public void Ack(string receiver)
+     {
+          lock (_lock)
+          {
+               _inProcess.Remove(receiver);
+               _acked.Add(receiver);
+          }
+     }
+
+     // Livrarea s-a oprit fara verdict (receptorul s-a deconectat); mesajul poate fi timis mai tarziu
+     public void Release(string receiver)
+     {
+          lock (_lock)
+               _inProcess.Remove(receiver);
+     }
+
+     public int Failures(string receiver)
+     {
+          lock (_lock)
+          {
+               _failures[receiver] = _failures.GetValueOrDefault(receiver) + 1;
+               return _failures[receiver];
+          }
+     }
+
+     public void GiveUp(string receiver)
+     {
+          lock (_lock)
+          {
+               _inProcess.Remove(receiver);
+               _gaveUp.Add(receiver);
+          }
+     }
+
+     public (int acked, int gaveUp, int inProcess) GetStatus()
+     {
+          lock (_lock)
+               return (_acked.Count, _gaveUp.Count, _inProcess.Count);
+     }
 }
 
 
@@ -18,6 +88,7 @@ public class QueuedMessage
 public class BrokerState
 {
      private readonly Logger _log;
+     private readonly MessageSave _save;
      private readonly List<ReceiverConnection> _receivers = new();
      private readonly object _receiversLock = new();
      private readonly string _deadLetterPath;
@@ -32,24 +103,46 @@ public class BrokerState
      // Cate o coada pentru fiecare tip de mesaj
      public ConcurrentDictionary<string, ConcurrentQueue<QueuedMessage>> Queues = new();
 
-     public BrokerState(Logger log)
+     public BrokerState(Logger log, MessageSave save)
      {
           _log = log;
+          _save = save;
           Directory.CreateDirectory("logs");
           _deadLetterPath = Path.Combine("logs", "deadletter.log");
      }
 
+     // Salvam mesajul in fisier si il punem in coada
      public void Enqueue(Message message)
      {
-          Enqueue(new QueuedMessage { Message = message });
+          _save.Enqueued(message);
+          Requeue(new QueuedMessage { Message = message });
      }
 
-     public void Enqueue(QueuedMessage queued)
+     // Punem mesajul inapoi in coada, pentru retry
+     public void Requeue(QueuedMessage queued)
      {
           var queue = Queues.GetOrAdd(queued.Message.MessageType, _ => new ConcurrentQueue<QueuedMessage>());
           queue.Enqueue(queued);
      }
 
+     // Recuperam mesajele din fisier si le punem inapoi in coada
+     public int Recover()
+     {
+          List<QueuedMessage> messages = _save.Recover();
+          foreach (QueuedMessage q in messages)
+               Requeue(q);
+          return messages.Count;
+     }
+
+     public void RecordAck(string messageId, string receiver)
+     {
+          _save.Ack(messageId, receiver);
+     }
+
+     public void Complete(QueuedMessage queued)
+     {
+          _save.Complete(queued.Message.MessageId);
+     }
 
      // Da un nume unic, si adauga receptorul in lista de receptori, ca sa nu sa se repete numele
      public ReceiverConnection RegisterReceiver(string baseName, IEnumerable<string> subscriptions, System.Net.Sockets.Socket socket)

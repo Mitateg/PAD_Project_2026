@@ -15,7 +15,7 @@ public class ReceiverConnection
 	public BlockingCollection<BrokerReply> Acks { get; } = new();
 
      // Mesajele de livrat catre ACEST receptor. Fiecare receptor are un thread propriu care o goleste
-	public BlockingCollection<Message> Outbox { get; } = new();
+	public BlockingCollection<QueuedMessage> Outbox { get; } = new();
 
      // Lock pentru a livra un singur mesaj o data la un receptor
      public readonly object _deliveryLock = new();

@@ -136,12 +136,12 @@ public class BrokerState
 
      public void RecordAck(string messageId, string receiver)
      {
-          _save.Ack(messageId, receiver);
+          _save.Acked(messageId, receiver);
      }
 
      public void Complete(QueuedMessage queued)
      {
-          _save.Complete(queued.Message.MessageId);
+          _save.Done(queued.Message.MessageId);
      }
 
      // Da un nume unic, si adauga receptorul in lista de receptori, ca sa nu sa se repete numele

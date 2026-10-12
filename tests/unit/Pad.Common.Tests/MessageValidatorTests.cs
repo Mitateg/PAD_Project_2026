@@ -1,60 +1,128 @@
 using Pad.Common;
+using Pad.Common.Grpc;
 using Xunit;
 
 namespace Pad.Common.Tests;
 
 public class MessageValidatorTests
 {
-    private const string Valid =
-        """{"messageId":"m1","correlationId":"c1","messageType":"Anunt","schemaVersion":1,"occurredAt":"2026-09-14T10:00:00Z","payload":{"orderId":1}}""";
+     /// <summary>Helper: creeaza un BrokerMessage valid cu toate campurile.</summary>
+     private static BrokerMessage ValidMessage() => new()
+     {
+          MessageId = "m1",
+          CorrelationId = "c1",
+          MessageType = "Anunt",
+          SchemaVersion = 1,
+          OccurredAt = "2026-09-14T10:00:00Z",
+          PayloadJson = """{"orderId":1}""",
+     };
 
-    [Fact]
-    public void AnuntValid_TreceValidarea()
-    {
-        bool ok = MessageValidator.TryParse(Valid, out var message, out var reason);
+     [Fact]
+     public void AnuntValid_TreceValidarea()
+     {
+          var message = ValidMessage();
 
-        Assert.True(ok);
-        Assert.Null(reason);
-        Assert.Equal("m1", message!.MessageId);
-    }
+          string? reason = MessageValidator.Validate(message);
 
-    [Fact]
-    public void JsonInvalid_ReturneazaInvalidJson()
-    {
-        bool ok = MessageValidator.TryParse("nu e json", out var message, out var reason);
+          Assert.Null(reason);
+     }
 
-        Assert.False(ok);
-        Assert.Null(message);
-        Assert.Equal("invalid_json", reason);
-    }
+     [Fact]
+     public void AlertaValida_TreceValidarea()
+     {
+          var message = ValidMessage();
+          message.MessageType = "Alerta";
 
-    [Fact]
-    public void FaraMessageType_ReturneazaMissingField()
-    {
-        string json = Valid.Replace("\"messageType\":\"Anunt\",", "");
+          string? reason = MessageValidator.Validate(message);
 
-        MessageValidator.TryParse(json, out _, out var reason);
+          Assert.Null(reason);
+     }
 
-        Assert.Equal("missing_field:messageType", reason);
-    }
+     [Fact]
+     public void FaraMessageId_ReturneazaMissingField()
+     {
+          var message = ValidMessage();
+          message.MessageId = "";
 
-    [Fact]
-    public void FaraPayload_ReturneazaMissingField()
-    {
-        string json = Valid.Replace(",\"payload\":{\"orderId\":1}", "");
+          string? reason = MessageValidator.Validate(message);
 
-        MessageValidator.TryParse(json, out _, out var reason);
+          Assert.Equal("missing_field:messageId", reason);
+     }
 
-        Assert.Equal("missing_field:payload", reason);
-    }
+     [Fact]
+     public void FaraCorrelationId_ReturneazaMissingField()
+     {
+          var message = ValidMessage();
+          message.CorrelationId = "";
 
-    [Fact]
-    public void TipNecunoscut_ReturneazaUnknownType()
-    {
-        string json = Valid.Replace("Anunt", "OrderDeleted");
+          string? reason = MessageValidator.Validate(message);
 
-        MessageValidator.TryParse(json, out _, out var reason);
+          Assert.Equal("missing_field:correlationId", reason);
+     }
 
-        Assert.Equal("unknown_type", reason);
-    }
+     [Fact]
+     public void FaraMessageType_ReturneazaMissingField()
+     {
+          var message = ValidMessage();
+          message.MessageType = "";
+
+          string? reason = MessageValidator.Validate(message);
+
+          Assert.Equal("missing_field:messageType", reason);
+     }
+
+     [Fact]
+     public void FaraOccuredAt_ReturneazaMissingField()
+     {
+          var message = ValidMessage();
+          message.OccurredAt = "";
+
+          string? reason = MessageValidator.Validate(message);
+
+          Assert.Equal("missing_field:occurredAt", reason);
+     }
+
+     [Fact]
+     public void FaraPayload_ReturneazaMissingField()
+     {
+          var message = ValidMessage();
+          message.PayloadJson = "";
+
+          string? reason = MessageValidator.Validate(message);
+
+          Assert.Equal("missing_field:payload", reason);
+     }
+
+     [Fact]
+     public void TipNecunoscut_ReturneazaUnknownType()
+     {
+          var message = ValidMessage();
+          message.MessageType = "OrderDeleted";
+
+          string? reason = MessageValidator.Validate(message);
+
+          Assert.Equal("unknown_type", reason);
+     }
+
+     [Fact]
+     public void TipPrivat_AcceptatCuExtraTypes()
+     {
+          var message = ValidMessage();
+          message.MessageType = "ion-1"; // canal privat = numele receiver-ului
+
+          string? reason = MessageValidator.Validate(message, extraTypes: new[] { "ion-1" });
+
+          Assert.Null(reason);
+     }
+
+     [Fact]
+     public void TipPrivat_RespinsFaraExtraTypes()
+     {
+          var message = ValidMessage();
+          message.MessageType = "ion-1";
+
+          string? reason = MessageValidator.Validate(message);
+
+          Assert.Equal("unknown_type", reason);
+     }
 }

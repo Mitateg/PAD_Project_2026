@@ -5,11 +5,8 @@ namespace Pad.Common;
 /// </summary>
 public static class Constants
 {
-     /// <summary>Portul pe care asculta broker-ul.</summary>
+     /// <summary>Portul pe care asculta broker-ul (gRPC / HTTP2).</summary>
      public const int BrokerPort = 4242;
-
-     /// <summary>Portul de rezerva daca 4242 este ocupat.</summary>
-     public const int BrokerFallbackPort = 4243;
 
      /// <summary>
      /// Tipurile "publice": un mesaj de acest tip ajunge la toti receiver-ii abonati la el.
@@ -29,15 +26,11 @@ public static class Constants
      /// <summary>Pauza intre doua incercari de livrare.</summary>
      public static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
 
-     /// <summary>Cat timp pastram un mesaj pe care nu l-a primit nimeni (nu exista abonat) inainte de dead-letter.</summary>
+     /// <summary>Cat timp pastram un mesaj pe care nu l-a primit nimeni inainte de dead-letter.</summary>
      public static readonly TimeSpan MessageTtl = TimeSpan.FromMinutes(5);
 
      /// <summary>Cat asteptam un ACK inainte sa consideram incercarea esuata.</summary>
      public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(5);
-
-     /// <summary>Rolurile pe care le poate declara un client in mesajul HELLO.</summary>
-     public const string RoleSender = "sender";
-     public const string RoleReceiver = "receiver";
 
      /// <summary>Valorile campului "status" din raspunsul broker-ului.</summary>
      public const string StatusAck = "ACK";

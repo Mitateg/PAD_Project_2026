@@ -1,68 +1,80 @@
 ﻿using System.Collections.Concurrent;
-using System.Net.Sockets;
+using System.Collections.Concurrent;
 using Pad.Common;
+using Pad.Common.Grpc;
+using Grpc.Core;
 
 namespace Pad.Broker;
+
+/// Rezultatul unui ACK primit de la receiver (inlocuieste BrokerReply in contextul receiver-ului).
+public class AckResult
+{
+     public string MessageId { get; set; } = "";
+     public bool IsAck { get; set; }
+}
+
 
 // Conexiunea broker-ului cu un receptor: socketul, abonarile, ACK-urile si coada lui proprie de livrare
 public class ReceiverConnection
 {
-	public string Name { get; }
-	public HashSet<string> Subscriptions { get; }
-	public Socket Socket { get; }
+     public string Name { get; }
+     public HashSet<string> Subscriptions { get; }
 
-	// ACK-urile venite de la receiver
-	public BlockingCollection<BrokerReply> Acks { get; } = new();
+     /// Stream-ul gRPC catre receiver (inlocuieste Socket-ul).
+     private readonly IServerStreamWriter<ServerEvent> _stream;
 
-     // Mesajele de livrat catre ACEST receptor. Fiecare receptor are un thread propriu care o goleste
-	public BlockingCollection<QueuedMessage> Outbox { get; } = new();
+     /// ACK-urile venite de la receiver.
+     public BlockingCollection<AckResult> Acks { get; } = new();
 
-     // Lock pentru a livra un singur mesaj o data la un receptor
+     /// Mesajele de livrat catre ACEST receptor.
+     public BlockingCollection<QueuedMessage> Outbox { get; } = new();
+
+     // Lock pentru a livra un singur mesaj odata la un receptor.
      public readonly object _deliveryLock = new();
 
-	public bool IsConnected { get; private set; } = true;
+     public bool IsConnected { get; private set; } = true;
 
-	public ReceiverConnection(string name, IEnumerable<string> subscriptions, Socket socket)
-	{
-		Name = name;
-		Subscriptions = new HashSet<string>(subscriptions);
-		Socket = socket;
+     public ReceiverConnection(string name, IEnumerable<string> subscriptions, IServerStreamWriter<ServerEvent> stream)
+     {
+          Name = name;
+          Subscriptions = new HashSet<string>(subscriptions);
+          _stream = stream;
      }
 
+     // Livrarea unui mesaj catre receptor prin gRPC stream si asteptarea ACK-ului.
+     public bool Deliver(BrokerMessage message)
+     {
+          lock (_deliveryLock)
+          {
+               if (!IsConnected)
+                    return false;
 
-     // Livraram un mesaj catre receptor, asteptam ACK-ul; true - primit, false - la timeout si receptor deconectat
-     public bool Deliver(Message message)
-	{
-		lock(_deliveryLock)
-		{
-			if (!IsConnected)
-				return false;
-			try
-			{
-				LineReader.WriteJson(Socket, message);
+               try
+               {
+                    // Trimitem mesajul prin stream-ul gRPC (sincron, cu .Wait())
+                    _stream.WriteAsync(new ServerEvent { Message = message }).Wait();
                }
-			catch (SocketException)
-			{
+               catch (Exception ex) when (ex is InvalidOperationException || ex is RpcException || ex.InnerException is RpcException)
+               {
                     // Receptorul s-a deconectat
                     return false;
-			}
-
-               // Asteptam ACK, daca receptorul se deconecteaza, ClientHelper apeleaza
-               // Acks.CompleteAdding() si TryTake va returna false
-               while (Acks.TryTake(out BrokerReply? ack, Constants.AckTimeout))
-			{
-				if (ack.MessageId == message.MessageId) return ack.IsAck; // ACK pentru alt mesaj (intarziat), il ignoram si asteptam
-
                }
 
-			return false;
+               // Asteptam ACK, la fel ca inainte
+               while (Acks.TryTake(out AckResult? ack, Constants.AckTimeout))
+               {
+                    if (ack.MessageId == message.MessageId)
+                         return ack.IsAck;
+               }
+
+               return false;
           }
      }
 
-	public void MarkDisconnected()
-	{
-		IsConnected = false;
-		Acks.CompleteAdding();
+     public void MarkDisconnected()
+     {
+          IsConnected = false;
+          Acks.CompleteAdding();
+          Outbox.CompleteAdding();
      }
 }
-

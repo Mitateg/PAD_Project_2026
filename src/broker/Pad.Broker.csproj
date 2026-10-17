@@ -1,14 +1,18 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Web">
 
-	<!-- Broker (P2): asculta pe 4242 cu un Socket creat manual (Bind + Listen + Accept),
-       valideaza mesajele, le pune in cozi per messageType si le livreaza abonatilor. -->
+	<!-- Broker (P2 gRPC): server gRPC pe ASP.NET Core / Kestrel.
+	     Valideaza mesajele, le pune in cozi si le livreaza abonatilor. -->
 	<PropertyGroup>
-		<OutputType>Exe</OutputType>
 		<TargetFramework>net8.0</TargetFramework>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<RootNamespace>Pad.Broker</RootNamespace>
 	</PropertyGroup>
+
+	<!-- Pachetul ASP.NET pentru a gazdui servicii gRPC -->
+	<ItemGroup>
+		<PackageReference Include="Grpc.AspNetCore" Version="2.59.0" />
+	</ItemGroup>
 
 	<ItemGroup>
 		<ProjectReference Include="..\common\Pad.Common.csproj" />

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Pad.Common;
+using Pad.Common.Grpc;
 
 namespace Pad.Sender;
 
@@ -10,18 +11,18 @@ namespace Pad.Sender;
 public static class MessageFactory
 {
     /// <summary>Mesaj cu textul scris de utilizator.</summary>
-    public static Message FromText(string messageType, string text, string? correlationId = null)
+    public static BrokerMessage FromText(string messageType, string text, string? correlationId = null)
     {
-        return new Message
+        return new BrokerMessage
         {
             CorrelationId = correlationId ?? Guid.NewGuid().ToString(),
             MessageType = messageType,
-            Payload = JsonSerializer.SerializeToElement(new { text }, Json.Options),
+            PayloadJson = JsonSerializer.SerializeToElement(new { text }, Json.Options),
         };
     }
 
     /// <summary>Mesaj generat automat, cu un text de proba potrivit tipului.</summary>
-    public static Message Sample(string messageType, string? correlationId = null)
+    public static BrokerMessage Sample(string messageType, string? correlationId = null)
     {
         string text = messageType switch
         {

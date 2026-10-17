@@ -23,6 +23,12 @@ public class SenderOptions
     /// </summary>
     public string Name { get; set; } = "sender";
 
+    /// <summary>
+    /// Adresa pe care o cere gRPC. "http://" (nu https) pentru ca broker-ul asculta
+    /// HTTP/2 necriptat, exact ca receiver-ul. Acelasi format il foloseste si colega in receiver.
+    /// </summary>
+    public string BrokerAddress => $"http://{Host}:{Port}";
+
     public static SenderOptions Parse(string[] args)
     {
         var options = new SenderOptions();

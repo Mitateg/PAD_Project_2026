@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Sender (P1): construieste mesaje, le trimite broker-ului printr-un Socket creat manual
-       si asteapta ACK. Retry la timeout / conexiune pierduta. -->
+  <!-- Sender (P1): construieste mesaje si le trimite broker-ului prin gRPC (Partea 2),
+       asteptand ACK. Retry la timeout / broker indisponibil.
+       Pachetele gRPC (Grpc.Net.Client, Google.Protobuf) si clientul generat din
+       Protos/broker.proto vin prin referinta la Pad.Common. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>

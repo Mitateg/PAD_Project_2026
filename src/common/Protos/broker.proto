@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+option csharp_namespace = "Pad.Common.Grpc";
+
+package Pad;
+
+// Mesajul car circula, inlocuind Message.csharp_namespace
+
+message BrokerMessage {
+    string message_id = 1;
+    string correlation_id = 2;
+    string message_type = 3;
+    int32 schema_version = 4;
+    string occurred_at = 5;
+    string payload_json = 6;
+}
+
+// Pentru sender
+
+message RegisterSenderRequest{
+	string name = 1;
+}
+
+message RegisterReply {
+	string assigned_name = 1;
+}
+
+message SendReply {
+	string status = 1;
+	string message_id = 2;
+	string reason = 3;		// doar la NACK
+}
+
+message ListReceiversRequest {}
+
+message ListReceiverReply {
+	repeated string receivers = 1;
+}
+
+// Pentru receiver
+
+
+message RegisterReceiverRequest {
+	string name = 1;
+	repeated string subscribe_to = 2;
+}
+
+message ReceiverAck {
+	string message_id = 1;
+	string status = 2;
+}
+
+message SubscriptionChange {
+	string action = 1;
+	string type = 2;
+}
+
+// ce trimite receptorul la broker
+message ReceiverEvent {
+	oneof event {
+		RegisterReceiverRequest register = 1;
+		ReceiverAck ack = 2;
+		SubscriptionChange subscription = 3;
+	}
+}
+
+// ce trimite brokerul catre receptor
+message ServerEvent {
+	oneof event {
+		RegisterReply registered = 1;
+		BrokerMessage message = 2;
+	}
+}
+
+// Serviciul gRPC
+service BrokerService {
+	// senderul se inregistreaza si primeste un nume unic
+	rpc RegisterSender(RegisterSenderRequest) returns (RegisterReply);
+	
+	// senderul trimite un mesaj si primeste ACK/NACK
+	rpc SendMessage(BrokerMessage) returns (SendReply);
+
+	// senderul listeaza receptorii conectati
+	rpc GetReceivers(ListReceiversRequest) returns (ListReceiverReply);
+
+	// primul ReceiverEvent TREBUIE sa fie RegisterReceiverRequest, apoi trimite ACK-uri si schimbari de abonament si primeste mesaje de la broker prin ServerEvent
+	rpc Subscribe(stream ReceiverEvent) returns (stream ServerEvent);
+}

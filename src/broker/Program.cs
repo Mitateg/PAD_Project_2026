@@ -1,47 +1,44 @@
-﻿using System.Net;
-using System.Net.Sockets;
-using Pad.Common;
+﻿using Pad.Common;
 using Pad.Broker;
 
 // Punct de intrare a brokerului, care accepta conexiuni de la clienti (senderi si receptori) si porneste un dispatcher pentru a livra mesajele catre receptori
 var log = new Logger("broker");
+log.Info("broker_starting", result: $"gRPC pe portul {Constants.BrokerPort}");
+
 var save = new MessageSave(Path.Combine("data", "broker.wal"), log);
 var state = new BrokerState(log, save);
 
 int recovered = state.Recover();
-log.Info("broker_recovered", result: $"recovered {recovered} messages from WAL");
+if (recovered > 0)
+     log.Info("broker_recovered", result: $"{recovered} mesaje din WAL");
 
-Socket listner = CreateListner(log);
-
+// Pornim dispatcher-ul pe un thread separat (la fel ca inainte)
 var dispatcher = new Dispatcher(state, log);
-_ = Task.Run(() => dispatcher.RunForever());
+var dispatcherThread = new Thread(() => dispatcher.RunForever()) { IsBackground = true, Name = "dispatcher" };
+dispatcherThread.Start();
 
-while (true)
+// ASP.NET Core builder — inlocuieste bucla noastra manuala de Accept()
+var builder = WebApplication.CreateBuilder(args);
+
+// Kestrel asculta pe portul nostru, doar HTTP/2 (necesar pentru gRPC)
+builder.WebHost.ConfigureKestrel(options =>
 {
-    Socket client = listner.Accept(); // Acceptam conexiunea de la client
-     _ = Task.Run(() => new ClientHandler(client, state, log).Run());
-}
-
-
-static Socket CreateListner(Logger log)
-{
-     foreach (int port in new[] { Constants.BrokerPort, Constants.BrokerFallbackPort })
+     options.ListenAnyIP(Constants.BrokerPort, listenOptions =>
      {
-          // Cream socketul TCP si il legam la portul dorit
-          var listner = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-          try
-          {
-               listner.Bind(new IPEndPoint(IPAddress.Any, port));
-               listner.Listen(backlog: 100);
-               log.Info("broker_started", result: $"listening on port {port}");
-               return listner;
-          }
-          catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
-          {
-               log.Warn("port_in_use", result: $"port {port} is already in use, trying next");
-               listner.Close();
-          }
-     }
+          listenOptions.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2;
+     });
+});
 
-     throw new InvalidOperationException("Could not bind to any port");
-}
+builder.Services.AddGrpc();
+
+// Inregistram BrokerState ca singleton, ca serviciul gRPC sa il poata folosi
+builder.Services.AddSingleton(state);
+builder.Services.AddSingleton(log);
+
+var app = builder.Build();
+
+// Mapam serviciul gRPC — echivalentul lui "Accept() -> new Thread(ClientHandler.Run)"
+app.MapGrpcService<Service>();
+
+log.Info("broker_started", result: $"gRPC listening on port {Constants.BrokerPort}");
+app.Run();

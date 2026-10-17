@@ -1,4 +1,5 @@
 ﻿using Pad.Common;
+using Pad.Common.Grpc;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
@@ -69,7 +70,7 @@ public class Dispatcher
 
 	private void Examine(QueuedMessage queued)
 	{
-		Message message = queued.Message;
+		BrokerMessage message = queued.Message;
 		int dispatched = 0;
 		foreach (ReceiverConnection receiver in _state.SubscribersOf(message.MessageType))
 		{
@@ -157,7 +158,7 @@ public class Dispatcher
      // Incearca sa livreze mesajul catre receptor. Daca nu reuseste, il pune inapoi in Outbox dupa un delay.
      private void DeliverAttempt(QueuedMessage queued, ReceiverConnection receiver)
 	{
-		Message message = queued.Message;
+		BrokerMessage message = queued.Message;
 		
 		if (!receiver.IsConnected)
 		{

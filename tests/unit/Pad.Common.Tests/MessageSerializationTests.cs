@@ -1,66 +1,95 @@
-using System.Text.Json;
-using Pad.Common;
+using Google.Protobuf;
+using Pad.Common.Grpc;
 using Xunit;
 
 namespace Pad.Common.Tests;
 
 public class MessageSerializationTests
 {
-    [Fact]
-    public void Serialize_ProduceCampuriCamelCase_PeOSinguraLinie()
-    {
-        var message = new Message
-        {
-            CorrelationId = "corr-1",
-            MessageType = "Anunt",
-            Payload = JsonDocument.Parse("""{"orderId":42}""").RootElement,
-        };
+     [Fact]
+     public void BrokerMessage_SetSiGet_PastreazaToateCampurile()
+     {
+          var message = new BrokerMessage
+          {
+               MessageId = "id-1",
+               CorrelationId = "corr-1",
+               MessageType = "Anunt",
+               SchemaVersion = 1,
+               OccurredAt = "2026-09-14T10:00:00.0000000Z",
+               PayloadJson = """{"amount":10.5}""",
+          };
 
-        string json = Json.Serialize(message);
+          Assert.Equal("id-1", message.MessageId);
+          Assert.Equal("corr-1", message.CorrelationId);
+          Assert.Equal("Anunt", message.MessageType);
+          Assert.Equal(1, message.SchemaVersion);
+          Assert.Equal("2026-09-14T10:00:00.0000000Z", message.OccurredAt);
+          Assert.Equal("""{"amount":10.5}""", message.PayloadJson);
+     }
 
-        Assert.Contains("\"messageId\"", json);
-        Assert.Contains("\"messageType\":\"Anunt\"", json);
-        Assert.Contains("\"payload\":{\"orderId\":42}", json);
-        Assert.DoesNotContain("\n", json); // framing-ul cere o singura linie
-    }
+     [Fact]
+     public void BrokerMessage_ProtobufSerializeDeserialize_PastreazaCampurile()
+     {
+          var original = new BrokerMessage
+          {
+               MessageId = "id-1",
+               CorrelationId = "corr-1",
+               MessageType = "Anunt",
+               SchemaVersion = 1,
+               OccurredAt = "2026-09-14T10:00:00Z",
+               PayloadJson = """{"orderId":42}""",
+          };
 
-    [Fact]
-    public void Serialize_ApoiDeserialize_PastreazaToateCampurile()
-    {
-        var original = new Message
-        {
-            MessageId = "id-1",
-            CorrelationId = "corr-1",
-            MessageType = "Anunt",
-            SchemaVersion = 1,
-            OccurredAt = "2026-09-14T10:00:00.0000000Z",
-            Payload = JsonDocument.Parse("""{"amount":10.5}""").RootElement,
-        };
+          // Serializare protobuf binara si inapoi
+          byte[] bytes = original.ToByteArray();
+          var copy = BrokerMessage.Parser.ParseFrom(bytes);
 
-        var copy = Json.TryDeserialize<Message>(Json.Serialize(original));
+          Assert.Equal(original.MessageId, copy.MessageId);
+          Assert.Equal(original.CorrelationId, copy.CorrelationId);
+          Assert.Equal(original.MessageType, copy.MessageType);
+          Assert.Equal(original.SchemaVersion, copy.SchemaVersion);
+          Assert.Equal(original.OccurredAt, copy.OccurredAt);
+          Assert.Equal(original.PayloadJson, copy.PayloadJson);
+     }
 
-        Assert.NotNull(copy);
-        Assert.Equal(original.MessageId, copy!.MessageId);
-        Assert.Equal(original.CorrelationId, copy.CorrelationId);
-        Assert.Equal(original.MessageType, copy.MessageType);
-        Assert.Equal(original.SchemaVersion, copy.SchemaVersion);
-        Assert.Equal(original.OccurredAt, copy.OccurredAt);
-        Assert.Equal(10.5, copy.Payload.GetProperty("amount").GetDouble());
-    }
+     [Fact]
+     public void SendReply_Ack_ConformContractului()
+     {
+          var reply = new SendReply
+          {
+               Status = Constants.StatusAck,
+               MessageId = "id-7"
+          };
 
-    [Fact]
-    public void TryDeserialize_JsonStricat_ReturneazaNull()
-    {
-        var result = Json.TryDeserialize<Message>("{ nu e json");
+          Assert.Equal("ACK", reply.Status);
+          Assert.Equal("id-7", reply.MessageId);
+          Assert.Empty(reply.Reason);
+     }
 
-        Assert.Null(result);
-    }
+     [Fact]
+     public void SendReply_Nack_CuMotiv()
+     {
+          var reply = new SendReply
+          {
+               Status = Constants.StatusNack,
+               MessageId = "id-8",
+               Reason = "unknown_type"
+          };
 
-    [Fact]
-    public void BrokerReply_Ack_SeSerializeazaConformContractului()
-    {
-        string json = Json.Serialize(BrokerReply.Ack("id-7"));
+          Assert.Equal("NACK", reply.Status);
+          Assert.Equal("id-8", reply.MessageId);
+          Assert.Equal("unknown_type", reply.Reason);
+     }
 
-        Assert.Equal("""{"status":"ACK","messageId":"id-7"}""", json);
-    }
+     [Fact]
+     public void Json_SerializeDeserialize_FunctioneazaCuObiecteSimple()
+     {
+          // Json.cs ramane neschimbat — verificam ca inca functioneaza pentru WAL
+          var obj = new { messageId = "m1", text = "salut" };
+          string json = Json.Serialize(obj);
+
+          Assert.Contains("\"messageId\":\"m1\"", json);
+          Assert.Contains("\"text\":\"salut\"", json);
+          Assert.DoesNotContain("\n", json); // WriteIndented = false
+     }
 }

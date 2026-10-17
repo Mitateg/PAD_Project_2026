@@ -1,9 +1,12 @@
-﻿using Pad.Common;
+﻿using System.Text.Json;
+using Google.Protobuf;
+using Pad.Common;
+using Pad.Common.Grpc;
 
 namespace Pad.Receiver;
 
 /// <summary>
-/// Proceseaza un mesaj primit: il afiseaza in consola si il scrie in logs/processed-{name}.log.
+/// Proceseaza un mesaj primit: ii afiseaza textul in consola si il scrie in logs/processed-{name}.log.
 /// Broker-ul livreaza "at-least-once", deci duplicatele sunt normale - le ignoram dupa messageId.
 /// </summary>
 public class MessageProcessor
@@ -40,7 +43,7 @@ public class MessageProcessor
     }
 
     /// <returns>false daca era duplicat si a fost ignorat, true daca a fost procesat acum.</returns>
-    public bool Process(Message message, string rawJson, bool isPrivate)
+    public bool Process(BrokerMessage message, bool isPrivate)
     {
         if (_deduplicate && _processedIds.Contains(message.MessageId))
         {
@@ -55,11 +58,10 @@ public class MessageProcessor
         Console.WriteLine();
         Console.WriteLine("------------------------------------------------------------");
         Console.WriteLine($">>> MESAJ NOU ({kind}) [{DateTime.Now:HH:mm:ss}]");
-        string text = message.Payload.TryGetProperty("text", out var textProp) ? textProp.GetString() ?? "" : rawJson;
-        Console.WriteLine(text);
+        Console.WriteLine(ExtractText(message));
         Console.WriteLine("------------------------------------------------------------");
 
-        File.AppendAllText(_processedFilePath, $"{message.MessageId} | {rawJson}{Environment.NewLine}");
+        File.AppendAllText(_processedFilePath, $"{message.MessageId} | {JsonFormatter.Default.Format(message)}{Environment.NewLine}");
 
         _processedIds.Add(message.MessageId);
         ProcessedCount++;
@@ -68,5 +70,25 @@ public class MessageProcessor
         // Reafisam meniul abia acum, ca sa apara contorul deja actualizat.
         AfterMessageShown?.Invoke();
         return true;
+    }
+
+    // Continutul vine ca text JSON (payload_json); afisam doar campul "text", iar daca lipseste, JSON-ul intreg.
+    private static string ExtractText(BrokerMessage message)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(message.PayloadJson);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("text", out JsonElement text)
+                && text.ValueKind == JsonValueKind.String)
+            {
+                return text.GetString() ?? "";
+            }
+        }
+        catch (JsonException)
+        {
+            // payload care nu e JSON valid: il afisam ca atare
+        }
+        return message.PayloadJson;
     }
 }

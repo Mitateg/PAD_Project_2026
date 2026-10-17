@@ -4,8 +4,8 @@ namespace Pad.Receiver;
 /// Optiunile de pornire ale receiver-ului, citite din argumentele liniei de comanda:
 ///   --name, --host, --port, --subscribe (Anunt,Alerta), --no-dedup, --crash-before-ack
 ///
-/// NOTA: valorile implicite de host/port trebuie verificate fata de broker-ul real
-/// (vezi docker-compose.yml sau src/broker/Program.cs).
+/// NOTA: valorile implicite de host/port trebuie sa coincida cu adresa gRPC a broker-ului real
+/// (vezi src/broker/Properties/launchSettings.json sau docker-compose.yml).
 /// </summary>
 public class ReceiverOptions
 {
@@ -14,10 +14,15 @@ public class ReceiverOptions
     /// <summary>False daca numele nu a fost dat prin --name; Program intreaba interactiv in acest caz.</summary>
     public bool NameGiven { get; private set; }
 
+    // In Docker, adresa vine din PAD_BROKER_HOST (numele serviciului din docker-compose).
     public string Host { get; set; } = Environment.GetEnvironmentVariable("PAD_BROKER_HOST") ?? "localhost";
     public int Port { get; set; } = 4242;
 
+    /// <summary>Adresa gRPC a broker-ului, fara TLS.</summary>
+    public string BrokerAddress => $"http://{Host}:{Port}";
+
     public List<string> Subscriptions { get; set; } = new();
+
     public bool Deduplicate { get; set; } = true;
     public bool CrashBeforeAck { get; set; }
 

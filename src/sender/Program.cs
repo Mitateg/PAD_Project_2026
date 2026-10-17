@@ -1,4 +1,5 @@
 using Pad.Common;
+using Pad.Common.Grpc;
 using Pad.Sender;
 
 // Punctul de intrare al sender-ului: un meniu simplu in consola.
@@ -19,7 +20,7 @@ catch (Exception ex) when (ex is ArgumentException || ex is FormatException || e
 
 // Logul se creeaza dupa conectare, cu numele primit de la broker (ex. "sender-1"),
 // ca doi senderi porniti odata sa scrie in fisiere diferite.
-using var broker = new BrokerClient(options.Host, options.Port, options.Name,
+using var broker = new BrokerClient(options.BrokerAddress, options.Name,
                                     assignedName => new Logger(assignedName, toConsole: false));
 
 // Asteptam broker-ul: daca nu ruleaza inca, reincercam pana porneste (Ctrl+C ca sa renunti).
@@ -102,7 +103,7 @@ void SendManual()
 
 // Trimitem mesajul si asteptam ACK. In consola aratam doar unde a plecat si rezultatul,
 // fara JSON-ul complet (acela ramane in logul sender-ului, daca e nevoie de el).
-void SendAndShow(Message message)
+void SendAndShow(BrokerMessage message)
 {
     bool isPublic = Constants.KnownMessageTypes.Contains(message.MessageType);
     string destination = isPublic ? $"toti abonatii la {message.MessageType}" : $"\"{message.MessageType}\" (privat)";

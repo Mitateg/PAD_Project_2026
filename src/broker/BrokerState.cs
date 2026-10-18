@@ -71,11 +71,20 @@ public class BrokerState
           _deadLetterPath = Path.Combine("logs", "deadletter.log");
      }
 
-     // Salvam mesajul protobuf in coada (serializat ca JSON in WAL, pentru persistenta)
-     public void Enqueue(BrokerMessage message)
+     // Enqueue returneaza true daca mesajul a fost adaugat, false daca era duplicat (deja in WAL).
+     // Senderul retrimite acelasi messageId dupa un timeout; nu il mai adaugam a doua oara.
+     public bool Enqueue(BrokerMessage message)
      {
+          if (_save.ContainsMessage(message.MessageId))
+          {
+               _log.Info("duplicate_ignored", message.CorrelationId, message.MessageId, message.MessageType,
+                         "already in WAL, returning ACK without re-enqueue");
+               return false; // duplicat, returnam ACK fara sa adaugam
+          }
+
           _save.Enqueued(message);
           Requeue(new QueuedMessage { Message = message });
+          return true;
      }
 
      public void Requeue(QueuedMessage queued)
@@ -91,11 +100,12 @@ public class BrokerState
           return messages.Count;
      }
 
-     public void RecordAck(string receiverName, string messageType) => _save.Acked(receiverName, messageType);
+     // RecordAck primeste messageId si receiverName (nu messageType).
+     public void RecordAck(string messageId, string receiverName) => _save.Acked(messageId, receiverName);
      public void Complete(QueuedMessage queued) => _save.Done(queued.Message.MessageId);
 
-     public ReceiverConnection RegisterReceiver(string baseName, IEnumerable<string> subscriptions,
-                                                 IServerStreamWriter<ServerEvent> stream)
+     // Separam generarea numelui de inregistrare, ca sa putem trimite Registered pe stream inainte de a adauga receiver-ul in lista (evitam race condition pe stream).
+     public string GenerateReceiverName(string baseName)
      {
           lock (_receiversLock)
           {
@@ -107,14 +117,29 @@ public class BrokerState
                          break;
                }
                _knownNames.Add(assigned);
+               return assigned;
+          }
+     }
 
-               var allSubscriptions = new List<string>(subscriptions) { assigned };
-               var receiver = new ReceiverConnection(assigned, allSubscriptions, stream);
+     public ReceiverConnection RegisterReceiverWithName(string assignedName, IEnumerable<string> subscriptions,
+                                                 IServerStreamWriter<ServerEvent> stream)
+     {
+          lock (_receiversLock)
+          {
+               var allSubscriptions = new List<string>(subscriptions) { assignedName };
+               var receiver = new ReceiverConnection(assignedName, allSubscriptions, stream);
                _receivers.Add(receiver);
 
                _log.Info("receiver_subscribed", result: $"{receiver.Name} -> {string.Join(", ", receiver.Subscriptions)}");
                return receiver;
           }
+     }
+
+     public ReceiverConnection RegisterReceiver(string baseName, IEnumerable<string> subscriptions,
+                                                 IServerStreamWriter<ServerEvent> stream)
+     {
+          string assignedName = GenerateReceiverName(baseName);
+          return RegisterReceiverWithName(assignedName, subscriptions, stream);
      }
 
      public string RegisterSender(string baseName)

@@ -28,6 +28,7 @@ public class Service : BrokerService.BrokerServiceBase
      }
 
      // Senderul trimite un mesaj
+     // Enqueue returneaza bool: daca e duplicat, tot dam ACK dar nu re-adaugam.
      public override Task<SendReply> SendMessage(BrokerMessage request, ServerCallContext context)
      {
           var stopwatch = Stopwatch.StartNew();
@@ -36,8 +37,7 @@ public class Service : BrokerService.BrokerServiceBase
 
           if (reason is not null)
           {
-               _log.Warn("message_rejected", request.CorrelationId, request.MessageId, request.MessageType,
-                         $"nack reason={reason}", stopwatch.Elapsed);
+               _log.Warn("message_rejected", request.CorrelationId, request.MessageId, request.MessageType, $"nack reason={reason}", stopwatch.Elapsed);
                return Task.FromResult(new SendReply
                {
                     Status = Constants.StatusNack,
@@ -46,9 +46,8 @@ public class Service : BrokerService.BrokerServiceBase
                });
           }
 
-          _state.Enqueue(request);
-          _log.Info("message_received", request.CorrelationId, request.MessageId, request.MessageType,
-                    "ok", stopwatch.Elapsed);
+          bool isNew = _state.Enqueue(request);
+          _log.Info("message_received", request.CorrelationId, request.MessageId, request.MessageType, isNew ? "ok" : "duplicate_ack", stopwatch.Elapsed);
 
           return Task.FromResult(new SendReply
           {
@@ -65,7 +64,8 @@ public class Service : BrokerService.BrokerServiceBase
           return Task.FromResult(reply);
      }
 
-     // Inlocuieste HELLO receiver + bucla de citire linii + WriteJson catre receiver
+     // Trimitem Registered inainte de a inregistra receiver-ul in dispatcher.
+     // Altfel, dispatcher-ul poate trimite un mesaj pe stream simultan cu Registered, iar doua WriteAsync concurente pe acelasi stream nu sunt permise.
      public override async Task Subscribe(
          IAsyncStreamReader<ReceiverEvent> requestStream,
          IServerStreamWriter<ServerEvent> responseStream,
@@ -84,17 +84,21 @@ public class Service : BrokerService.BrokerServiceBase
 
           var registerReq = firstEvent.Register;
 
-          // Inregistram receiver-ul
-          var receiver = _state.RegisterReceiver(
-              registerReq.Name,
-              registerReq.SubscribeTo,
-              responseStream);
+          // Mai intai trimitem Registered, apoi inregistram receiver-ul.
+          // RegisterReceiver returneaza numele atribuit, dar trebuie sa-l stim inainte de WriteAsync.
+          // Deci separam: generam numele, trimitem reply, apoi inregistram cu stream-ul.
+          string assignedName = _state.GenerateReceiverName(registerReq.Name);
 
-          // Trimitem inapoi numele atribuit
           await responseStream.WriteAsync(new ServerEvent
           {
-               Registered = new RegisterReply { AssignedName = receiver.Name }
+               Registered = new RegisterReply { AssignedName = assignedName }
           }, context.CancellationToken);
+
+          // Acum inregistram, dupa ce Registered a fost trimis pe stream.
+          var receiver = _state.RegisterReceiverWithName(
+              assignedName,
+              registerReq.SubscribeTo,
+              responseStream);
 
           _log.Info("receiver_connected", result: $"{receiver.Name} subscribed to [{string.Join(",", registerReq.SubscribeTo)}]");
 

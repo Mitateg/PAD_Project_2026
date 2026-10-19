@@ -1,6 +1,8 @@
-﻿# PAD Laborator
+# PAD Laborator
 
-Un agent de mesaje publish/subscribe, construit peste socket-uri TCP create manual, în .NET. Proiectul are trei aplicații de consolă: **sender**, **broker** și **receiver**.
+Un agent de mesaje publish/subscribe în .NET 8, cu trei aplicații de consolă: **sender**, **broker** și **receiver**.
+
+Comunicarea se face prin **gRPC**, cu mesajele descrise în [`src/common/Protos/broker.proto`](src/common/Protos/broker.proto) și serializate cu **protobuf**. (În prima parte a laboratorului totul mergea peste socket-uri TCP scrise de mână, cu mesaje JSON delimitate prin linii; acel nivel a fost înlocuit de RPC-uri, dar comportamentul sistemului a rămas același.)
 
 - **Sender** construiește mesaje și le trimite broker-ului. Un mesaj e considerat trimis abia după ce broker-ul răspunde `ACK`, iar acel `ACK` înseamnă că mesajul este **salvat pe disc** (vezi [Persistență](#persistență-write-ahead-log)).
 - **Broker** validează fiecare mesaj, îl scrie în jurnalul de pe disc (WAL) și îl pune într-o coadă după `messageType`. Un worker pentru fiecare tip îl împarte receiver-ilor abonați, iar fiecare receiver are propriul fir de livrare, cu confirmare (ACK), retry și dead-letter.
@@ -115,6 +117,32 @@ dotnet run --project src/sender
 
 Poți porni oricâți senderi și receiveri vrei, fiecare în propriul terminal. Broker-ul creează singur folderele `logs/` și `data/` în directorul din care îl pornești.
 
+### Load balancing (mai multe brokere)
+
+Sistemul poate rula cu mai multe brokere. Sender-ul și receiver-ul primesc o **listă de adrese** și trec singuri la următorul când cel curent răspunde `UNAVAILABLE`.
+
+```bash
+# Terminal 1 și 2: două brokere, fiecare cu portul și WAL-ul lui
+dotnet run --project src/broker -- --port 4242 --name broker-1
+dotnet run --project src/broker -- --port 4243 --name broker-2
+
+# Terminal 3 și 4: clienții primesc ambele adrese, în ordinea în care le încearcă
+dotnet run --project src/sender    -- --brokers localhost:4242,localhost:4243
+dotnet run --project src/receivers -- --brokers localhost:4242,localhost:4243 --name ion --subscribe Anunt
+```
+
+Aceeași listă se poate da și prin variabila de mediu `PAD_BROKER_ADDRESSES`.
+
+Lista fiind **ordonată**, al doilea broker se comportă natural ca o rezervă: toți clienții pornesc de la prima adresă și ajung la a doua abia când prima nu mai răspunde.
+
+Cum se comportă la o cădere:
+
+- **La pornire** — dacă primul broker nu răspunde, clientul trece imediat la următorul. Abia după ce le-a încercat pe toate fără succes face o pauză și reia turul.
+- **În timpul rulării** — sender-ul comută pe următorul broker și se reînregistrează acolo (deci poate primi alt nume, de exemplu `sender-2`). Receiver-ul se reconectează la alt broker și își reface abonările.
+- **Un `NACK` nu declanșează comutarea**: mesajul a fost refuzat pe fond (câmp lipsă, tip necunoscut), deci ar fi refuzat la fel de orice broker.
+
+Brokerele **nu își împart starea între ele**. Fiecare are coada și WAL-ul lui, deci un mesaj trimis către `broker-1` nu ajunge la receiverii conectați doar la `broker-2`. Pentru demonstrație, conectează clienții la aceeași listă de adrese.
+
 ### Rulare cu Docker Compose
 
 ```bash
@@ -150,12 +178,19 @@ docker run --rm -it --network host pad-receiver --name ion --subscribe Anunt,Ale
 
 ### Broker
 
-Broker-ul nu primește argumente. Ascultă pe portul **4242**, sau pe **4243** dacă 4242 este deja ocupat.
+| Opțiune | Implicit | Descriere |
+|---------|----------|-----------|
+| `--port` | `4242` | Portul gRPC pe care ascultă |
+| `--name` | `broker` | Numele din loguri, deci și fișierul `logs/<name>.log` |
+| `--wal` | `data/<name>.wal` | Fișierul write-ahead log |
+
+Fiecare instanță primește automat un WAL după numele ei, deci două brokere pornite cu `--name` diferit nu se bat pe același fișier.
 
 ### Sender
 
 | Opțiune | Implicit | Descriere |
 |---------|----------|-----------|
+| `--brokers` | `PAD_BROKER_ADDRESSES`, altfel `--host:--port` | Listă de brokere separate prin virgulă, ex. `localhost:4242,localhost:4243`. Vezi [Load balancing](#load-balancing-mai-multe-brokere) |
 | `--host` | `PAD_BROKER_HOST`, altfel `127.0.0.1` | Adresa broker-ului (IP sau nume de host) |
 | `--port` | `4242` | Portul broker-ului |
 | `--name` | `sender` | Numele cerut; broker-ul îl face unic (`sender-1`, `sender-2`, ...) |
@@ -165,6 +200,7 @@ Broker-ul nu primește argumente. Ascultă pe portul **4242**, sau pe **4243** d
 | Opțiune | Implicit | Descriere |
 |---------|----------|-----------|
 | `--name` | întrebat interactiv | Numele cerut; broker-ul îl face unic (`ion` devine `ion-1`) |
+| `--brokers` | `PAD_BROKER_ADDRESSES`, altfel `--host:--port` | Listă de brokere separate prin virgulă. Vezi [Load balancing](#load-balancing-mai-multe-brokere) |
 | `--host` | `PAD_BROKER_HOST`, altfel `localhost` | Adresa broker-ului (IP sau nume de host) |
 | `--port` | `4242` | Portul broker-ului |
 | `--subscribe` | niciunul | Tipuri publice separate prin virgulă, ex. `Anunt,Alerta` |
@@ -264,22 +300,47 @@ Un receiver care nu trimite ACK își consumă cele 3 încercări (`delivery_fai
 | `logs/<sender>.log` | Evenimentele fiecărui sender (`message_acked`, `ack_timeout`, `message_failed`) |
 | `logs/<receiver>.log` | Evenimentele tehnice ale receiver-ului |
 | `logs/processed-<receiver>.log` | Mesajele procesate de receiver; din el se reface deduplicarea după repornire |
-| `data/broker.wal` | Jurnalul mesajelor necomplet livrate (nu se editează manual) |
+| `data/<broker>.wal` | Jurnalul mesajelor necomplet livrate, câte unul pentru fiecare broker (nu se editează manual) |
 
-Format de log: `timestamp | nivel | componentă | eveniment | corr | msg | type | rezultat | durată`. Merită adăugat `data/` și `logs/` în `.gitignore`.
+Format de log: `timestamp | nivel | componentă | eveniment | corr | msg | type | rezultat | durată`. Folderele `data/` și `logs/` sunt deja în `.gitignore`, deci artefactele de rulare nu ajung în git.
 
 ## Teste
 
-Testele unitare acoperă `Pad.Common` (serializare JSON, validarea mesajelor și framing-ul pe linii):
+Rulezi tot cu o singură comandă:
 
 ```bash
 dotnet test
 ```
 
-| Clasă de test | Ce verifică |
-|---------------|-------------|
-| `MessageSerializationTests` | câmpuri camelCase, o singură linie, dus-întors complet, JSON-ul exact al unui ACK |
-| `MessageValidatorTests` | mesaj valid, JSON greșit, câmpuri lipsă, tip necunoscut |
-| `LineReaderTests` | linii reconstruite din bucăți TCP, pe un socket real de loopback |
+Sunt trei proiecte de test:
+
+| Proiect | Ce acoperă |
+|---------|------------|
+| `tests/unit/Pad.Common.Tests` | serializarea protobuf și validarea mesajelor |
+| `tests/contract/Pad.Contract.Tests` | exemplele din contract rămân valide |
+| `tests/integration/Pad.Integration.Tests` | sistemul întreg, cu un broker gRPC adevărat |
+
+**Testele de integrare** pornesc un broker real pe un port liber, îi conectează sender-ul adevărat (`Pad.Sender.BrokerClient`) și un receiver de test, apoi verifică:
+
+| Test | Ce demonstrează |
+|------|-----------------|
+| `FluxComplet_MesajulAjungeLaReceiverSiEsteConfirmat` | drumul complet sender → broker → receiver, cu `ACK` și `correlationId` păstrat |
+| `ReceiverDeconectatInainteDeAck_MesajulEsteRelivrat` | un receiver care cade înainte de `ACK` primește mesajul din nou la reconectare |
+| `BrokerRepornit_MesajeleSuntRecuperateDinWal` | mesajele nelivrate supraviețuiesc opririi broker-ului și sunt livrate după repornire |
+| `AcelasiMessageIdTrimisDeDouaOri_NuProduceDublura` | retrimiterea aceluiași `messageId` primește `ACK`, dar receiver-ul îl vede o singură dată |
+
+Fiecare test își are propriul port și propriul fișier WAL, într-un folder temporar șters la final, deci testele nu se influențează între ele.
+
+## Decizii de arhitectură
+
+Motivele din spatele alegerilor tehnice sunt în [`docs/adr/`](docs/adr/):
+
+| ADR | Decizie | Status |
+|-----|---------|--------|
+| [001](docs/adr/adr-001-tcp-si-framing.md) | Socket TCP brut, mesaje JSON pe linii | înlocuit de 002 |
+| [002](docs/adr/adr-002-grpc-si-protobuf.md) | gRPC peste HTTP/2, contract protobuf | acceptat |
+| [003](docs/adr/adr-003-load-balancing.md) | Failover pe client, cu listă ordonată de brokere | acceptat |
+
+ADR-001 descrie Partea 1 și se păstrează ca înregistrare istorică: arată de ce s-a ales atunci socketul brut. Nu se rescrie când codul se schimbă.
 
 Comportamentul broker-ului (persistență, retry, dead-letter) se verifică manual cu scenariile din secțiunea [Scenarii de eșec](#scenarii-de-eșec-demonstrații).

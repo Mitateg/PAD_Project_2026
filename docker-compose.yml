@@ -1,27 +1,40 @@
 # Fiecare serviciu are imaginea lui, construita din Dockerfile-ul propriu.
 #
+# FIX #4: Doi brokeri (broker1, broker2) pentru load balancing si failover.
+# Sender-ul si receiver-ul primesc ambele adrese prin --brokers si trec automat
+# la celalalt daca unul cade.
+#
 # Comenzi:
-#   docker compose up -d --build broker   # porneste broker-ul in fundal
-#   docker compose run --rm sender        # sender interactiv (meniu)
+#   docker compose up -d --build broker1 broker2   # porneste ambii brokeri
+#   docker compose run --rm sender                  # sender interactiv
 #   docker compose run --rm receiver --name ion --subscribe Anunt,Alerta
-#                                         # receiver interactiv; poti rula mai multe, in terminale diferite
-#   docker compose logs -f broker         # loguri broker
-#   docker compose down                   # opreste tot
+#   docker compose logs -f broker1 broker2          # loguri brokeri
+#   docker compose down                             # opreste tot
 
 services:
-  broker:
+  broker1:
     build:
-      # Contextul este radacina repo-ului, pentru ca broker-ul foloseste si src/common.
       context: .
       dockerfile: src/broker/Dockerfile
     image: pad-broker
+    command: ["--port", "4242", "--name", "broker1", "--wal", "data/broker.wal"]
     ports:
       - "4242:4242"
     volumes:
-      # Logurile (inclusiv deadletter.log) raman pe calculator.
       - ./logs:/app/logs
-      # WAL-ul brokerului (mesajele necomplet livrate) supravietuieste la kill / restart.
-      - ./data:/app/data
+      - ./data/broker1:/app/data
+
+  broker2:
+    build:
+      context: .
+      dockerfile: src/broker/Dockerfile
+    image: pad-broker
+    command: ["--port", "4243", "--name", "broker2", "--wal", "data/broker.wal"]
+    ports:
+      - "4243:4243"
+    volumes:
+      - ./logs:/app/logs
+      - ./data/broker2:/app/data
 
   sender:
     build:
@@ -29,14 +42,14 @@ services:
       dockerfile: src/sender/Dockerfile
     image: pad-sender
     environment:
-      # In reteaua Docker, broker-ul se gaseste dupa numele serviciului.
-      PAD_BROKER_HOST: broker
+      PAD_BROKER_HOST: broker1
     depends_on:
-      - broker
-    # Sender-ul are meniu: are nevoie de STDIN deschis si de terminal.
+      - broker1
+      - broker2
+    # FIX #4: Sender-ul primeste ambele adrese ale brokerilor.
+    command: ["--brokers", "broker1:4242,broker2:4243"]
     stdin_open: true
     tty: true
-    # Nu porneste la "docker compose up"; il pornesti cand vrei sa trimiti ceva.
     profiles:
       - interactiv
     volumes:
@@ -48,9 +61,12 @@ services:
       dockerfile: src/receivers/Dockerfile
     image: pad-receiver
     environment:
-      PAD_BROKER_HOST: broker
+      PAD_BROKER_HOST: broker1
     depends_on:
-      - broker
+      - broker1
+      - broker2
+    # FIX #4: Receiver-ul primeste ambele adrese ale brokerilor.
+    command: ["--brokers", "broker1:4242,broker2:4243"]
     stdin_open: true
     tty: true
     profiles:

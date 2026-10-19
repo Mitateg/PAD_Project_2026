@@ -121,16 +121,17 @@ Poți porni oricâți senderi și receiveri vrei, fiecare în propriul terminal.
 
 Sistemul poate rula cu mai multe brokere. Sender-ul și receiver-ul primesc o **listă de adrese** și trec singuri la următorul când cel curent răspunde `UNAVAILABLE`.
 
-Clienții primesc adresele în ordinea în care le încearcă:
-
 ```bash
+# Terminal 1 și 2: două brokere, fiecare cu portul și WAL-ul lui
+dotnet run --project src/broker -- --port 4242 --name broker-1
+dotnet run --project src/broker -- --port 4243 --name broker-2
+
+# Terminal 3 și 4: clienții primesc ambele adrese, în ordinea în care le încearcă
 dotnet run --project src/sender    -- --brokers localhost:4242,localhost:4243
 dotnet run --project src/receivers -- --brokers localhost:4242,localhost:4243 --name ion --subscribe Anunt
 ```
 
 Aceeași listă se poate da și prin variabila de mediu `PAD_BROKER_ADDRESSES`.
-
-Pornirea celui de-al doilea broker pe `4243` așteaptă opțiunile de port din broker (vezi [Broker](#broker)). Partea de client este gata și testată.
 
 Lista fiind **ordonată**, al doilea broker se comportă natural ca o rezervă: toți clienții pornesc de la prima adresă și ajung la a doua abia când prima nu mai răspunde.
 
@@ -177,9 +178,13 @@ docker run --rm -it --network host pad-receiver --name ion --subscribe Anunt,Ale
 
 ### Broker
 
-Deocamdată broker-ul nu primește argumente: ascultă pe portul **4242** și scrie în `data/broker.wal`.
+| Opțiune | Implicit | Descriere |
+|---------|----------|-----------|
+| `--port` | `4242` | Portul gRPC pe care ascultă |
+| `--name` | `broker` | Numele din loguri, deci și fișierul `logs/<name>.log` |
+| `--wal` | `data/<name>.wal` | Fișierul write-ahead log |
 
-> **În lucru.** Pentru a porni mai multe brokere pe aceeași mașină, broker-ul are nevoie de port, nume de log și cale WAL configurabile (altfel două instanțe se bat pe același port și pe același fișier). Sender-ul și receiver-ul știu deja să lucreze cu mai multe adrese — vezi [Load balancing](#load-balancing-mai-multe-brokere).
+Fiecare instanță primește automat un WAL după numele ei, deci două brokere pornite cu `--name` diferit nu se bat pe același fișier.
 
 ### Sender
 
@@ -325,5 +330,17 @@ Sunt trei proiecte de test:
 | `AcelasiMessageIdTrimisDeDouaOri_NuProduceDublura` | retrimiterea aceluiași `messageId` primește `ACK`, dar receiver-ul îl vede o singură dată |
 
 Fiecare test își are propriul port și propriul fișier WAL, într-un folder temporar șters la final, deci testele nu se influențează între ele.
+
+## Decizii de arhitectură
+
+Motivele din spatele alegerilor tehnice sunt în [`docs/adr/`](docs/adr/):
+
+| ADR | Decizie | Status |
+|-----|---------|--------|
+| [001](docs/adr/adr-001-tcp-si-framing.md) | Socket TCP brut, mesaje JSON pe linii | înlocuit de 002 |
+| [002](docs/adr/adr-002-grpc-si-protobuf.md) | gRPC peste HTTP/2, contract protobuf | acceptat |
+| [003](docs/adr/adr-003-load-balancing.md) | Failover pe client, cu listă ordonată de brokere | acceptat |
+
+ADR-001 descrie Partea 1 și se păstrează ca înregistrare istorică: arată de ce s-a ales atunci socketul brut. Nu se rescrie când codul se schimbă.
 
 Comportamentul broker-ului (persistență, retry, dead-letter) se verifică manual cu scenariile din secțiunea [Scenarii de eșec](#scenarii-de-eșec-demonstrații).

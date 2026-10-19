@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- Teste de integrare: pornesc un broker gRPC adevarat pe un port liber,
+	     conecteaza sender-ul real si un receiver de test, si verifica fluxul complet. -->
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<IsPackable>false</IsPackable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+		<PackageReference Include="xunit" Version="2.9.2" />
+		<PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+	</ItemGroup>
+
+	<!-- Brokerul este o aplicatie ASP.NET Core; ca sa-l pornim din teste avem nevoie
+	     de acelasi framework, pe care un proiect de test obisnuit nu il are implicit. -->
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\..\src\common\Pad.Common.csproj" />
+		<ProjectReference Include="..\..\..\src\broker\Pad.Broker.csproj" />
+		<ProjectReference Include="..\..\..\src\sender\Pad.Sender.csproj" />
+	</ItemGroup>
+
+</Project>

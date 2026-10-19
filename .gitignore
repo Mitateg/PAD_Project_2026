@@ -480,3 +480,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# PAD: artefacte de rulare (WAL-ul brokerului si logurile). Nu se comit.
+data/
+logs/

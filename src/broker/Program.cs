@@ -5,7 +5,7 @@ using Pad.Broker;
 
 int port = Constants.BrokerPort;
 string name = "broker";
-string walPath = Path.Combine("data", "broker.wal");
+string? walPath = null;
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -29,8 +29,12 @@ for (int i = 0; i < args.Length; i++)
                else
                     throw new ArgumentException("Lipseste valoarea pentru --wal");
                break;
+          default:
+               throw new ArgumentException($"Optiune necunoscuta: {args[i]}");
      }
 }
+
+walPath ??= Path.Combine("data", name + ".wal");
 
 var log = new Logger(name);
 log.Info("broker_starting", result: $"gRPC pe portul {port}");

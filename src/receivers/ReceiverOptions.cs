@@ -2,7 +2,8 @@ namespace Pad.Receiver;
 
 /// <summary>
 /// Optiunile de pornire ale receiver-ului, citite din argumentele liniei de comanda:
-///   --name, --host, --port, --subscribe (Anunt,Alerta), --no-dedup, --crash-before-ack
+///   --name, --brokers (host:port,host:port), --host, --port, --subscribe (Anunt,Alerta),
+///   --no-dedup, --crash-before-ack
 ///
 /// NOTA: valorile implicite de host/port trebuie sa coincida cu adresa gRPC a broker-ului real
 /// (vezi src/broker/Properties/launchSettings.json sau docker-compose.yml).
@@ -18,8 +19,12 @@ public class ReceiverOptions
     public string Host { get; set; } = Environment.GetEnvironmentVariable("PAD_BROKER_HOST") ?? "localhost";
     public int Port { get; set; } = 4242;
 
-    /// <summary>Adresa gRPC a broker-ului, fara TLS.</summary>
-    public string BrokerAddress => $"http://{Host}:{Port}";
+    // Lista de brokere (PAD_BROKER_ADDRESSES sau --brokers). Daca e goala, folosim Host:Port.
+    private List<string> _brokers = ParseAddresses(Environment.GetEnvironmentVariable("PAD_BROKER_ADDRESSES"));
+
+    /// <summary>Adresele gRPC ale brokerelor, in ordinea in care se incearca.</summary>
+    public IReadOnlyList<string> BrokerAddresses =>
+        _brokers.Count > 0 ? _brokers : new[] { $"http://{Host}:{Port}" };
 
     public List<string> Subscriptions { get; set; } = new();
 
@@ -37,6 +42,10 @@ public class ReceiverOptions
                 case "--name":
                     options.Name = RequireValue(args, ref i, "--name");
                     options.NameGiven = true;
+                    break;
+
+                case "--brokers":
+                    options._brokers = ParseAddresses(RequireValue(args, ref i, "--brokers"));
                     break;
 
                 case "--host":
@@ -71,6 +80,18 @@ public class ReceiverOptions
         }
 
         return options;
+    }
+
+    // "localhost:4242,broker2:4242" -> ["http://localhost:4242", "http://broker2:4242"]
+    private static List<string> ParseAddresses(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return new List<string>();
+
+        return text
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(a => a.Contains("://") ? a : "http://" + a)
+            .ToList();
     }
 
     private static string RequireValue(string[] args, ref int i, string flagName)

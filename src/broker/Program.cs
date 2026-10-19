@@ -7,31 +7,39 @@ int port = Constants.BrokerPort;
 string name = "broker";
 string? walPath = null;
 
-for (int i = 0; i < args.Length; i++)
+try
 {
-     switch (args[i])
+     for (int i = 0; i < args.Length; i++)
      {
-          case "--port":
-               if (i + 1 < args.Length && int.TryParse(args[++i], out int p))
-                    port = p;
-               else
-                    throw new ArgumentException("Lipseste sau e invalid valoarea pentru --port");
-               break;
-          case "--name":
-               if (i + 1 < args.Length)
-                    name = args[++i];
-               else
-                    throw new ArgumentException("Lipseste valoarea pentru --name");
-               break;
-          case "--wal":
-               if (i + 1 < args.Length)
-                    walPath = args[++i];
-               else
-                    throw new ArgumentException("Lipseste valoarea pentru --wal");
-               break;
-          default:
-               throw new ArgumentException($"Optiune necunoscuta: {args[i]}");
+          switch (args[i])
+          {
+               case "--port":
+                    if (i + 1 < args.Length && int.TryParse(args[++i], out int p))
+                         port = p;
+                    else
+                         throw new ArgumentException("Lipseste sau e invalid valoarea pentru --port");
+                    break;
+               case "--name":
+                    if (i + 1 < args.Length)
+                         name = args[++i];
+                    else
+                         throw new ArgumentException("Lipseste valoarea pentru --name");
+                    break;
+               case "--wal":
+                    if (i + 1 < args.Length)
+                         walPath = args[++i];
+                    else
+                         throw new ArgumentException("Lipseste valoarea pentru --wal");
+                    break;
+               default:
+                    throw new ArgumentException($"Optiune necunoscuta: {args[i]}");
+          }
      }
+}
+catch (Exception ex) when (ex is ArgumentException || ex is IndexOutOfRangeException)
+{
+     Console.WriteLine($"Argumente gresite: {ex.Message}");
+     return 2;
 }
 
 walPath ??= Path.Combine("data", name + ".wal");
@@ -76,3 +84,5 @@ app.MapGrpcService<Service>();
 
 log.Info("broker_started", result: $"gRPC listening on port {port}");
 app.Run();
+
+return 0;

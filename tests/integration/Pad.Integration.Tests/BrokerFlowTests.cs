@@ -35,6 +35,27 @@ public class BrokerFlowTests : IDisposable
     private static BrokerClient NewSender(params string[] addresses) =>
         new(addresses, "sender", name => new Logger("test-" + name, toConsole: false));
 
+    /// <summary>
+    /// Asteapta pana cand broker-ul nu mai raporteaza receiver-ul ca fiind conectat.
+    ///
+    /// Broker-ul scoate receiver-ul din lista abia in blocul finally al lui Subscribe,
+    /// adica ceva mai tarziu decat momentul in care clientul inchide conexiunea.
+    /// Daca ne-am reconecta imediat, numele "ana-1" ar parea inca ocupat si am primi
+    /// "ana-2" - alt destinatar, deci mesajul neconfirmat nu ne-ar mai reveni.
+    /// </summary>
+    private static async Task WaitUntilDisconnected(BrokerClient sender, string receiverName)
+    {
+        for (int i = 0; i < 100; i++)
+        {
+            if (!sender.ListReceivers().Contains(receiverName))
+                return;
+
+            await Task.Delay(100);
+        }
+
+        throw new TimeoutException($"Broker-ul inca il vede pe {receiverName} conectat.");
+    }
+
     // -----------------------------------------------------------------------
     // 1. Fluxul complet: sender -> broker -> receiver -> ACK
     // -----------------------------------------------------------------------
@@ -96,6 +117,9 @@ public class BrokerFlowTests : IDisposable
         {
             await primul.DisposeAsync();   // cade fara ACK
         }
+
+        // Ii dam broker-ului timp sa inregistreze deconectarea, ca numele sa se elibereze.
+        await WaitUntilDisconnected(sender, "ana-1");
 
         // A doua conexiune, acelasi nume de baza: broker-ul ii da din nou "ana-1",
         // pentru ca numele s-a eliberat. Deci mesajul neconfirmat ii revine.

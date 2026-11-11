@@ -41,6 +41,8 @@ public class BrokerConnection
     private volatile BrokerCall? _call;
     private MessageProcessor? _processor;
     private volatile bool _stopping;
+    private int _addressIndex;     // brokerul curent din lista de adrese
+    private int _failuresInARow;   // esecuri consecutive; se reseteaza la o conectare reusita
 
     /// <summary>Numele unic primit de la broker. Null pana la prima conectare.</summary>
     public string? AssignedName { get; private set; }
@@ -125,34 +127,48 @@ public class BrokerConnection
 
     private async Task RunForeverAsync()
     {
+        IReadOnlyList<string> addresses = _options.BrokerAddresses;
+
         while (!_stopping)
         {
+            string address = addresses[_addressIndex];
             try
             {
-                await ConnectAndReceiveAsync(_cts.Token);
+                await ConnectAndReceiveAsync(address, _cts.Token);
             }
             catch (Exception ex)
             {
                 if (_stopping)
                     return; // noi am inchis conexiunea, nu e o eroare
-                _log.Warn("connection_error", result: ex.Message);
+                _log.Warn("connection_error", result: $"{address}: {ex.Message}");
             }
 
             if (_stopping)
                 return;
 
             _call = null;
-            _log.Warn("broker_disconnected", result: $"reincerc in {ReconnectDelay.TotalSeconds}s");
-            Console.WriteLine($"[broker deconectat, reincerc in {ReconnectDelay.TotalSeconds}s]");
+            _failuresInARow++;
+            _addressIndex = (_addressIndex + 1) % addresses.Count;
 
-            try { await Task.Delay(ReconnectDelay, _cts.Token); }
-            catch (OperationCanceledException) { return; }
+            // Cat timp mai avem un broker de incercat in tura asta, trecem la el imediat;
+            // pauza vine abia dupa ce le-am incercat pe toate fara succes.
+            bool cycleDone = _failuresInARow % addresses.Count == 0;
+            _log.Warn("broker_unavailable", result: $"{address}, urmeaza {addresses[_addressIndex]}");
+            Console.WriteLine(cycleDone
+                ? $"[brokere indisponibile, reincerc in {ReconnectDelay.TotalSeconds}s]"
+                : $"[broker {address} indisponibil, incerc {addresses[_addressIndex]}]");
+
+            if (cycleDone)
+            {
+                try { await Task.Delay(ReconnectDelay, _cts.Token); }
+                catch (OperationCanceledException) { return; }
+            }
         }
     }
 
-    private async Task ConnectAndReceiveAsync(CancellationToken token)
+    private async Task ConnectAndReceiveAsync(string address, CancellationToken token)
     {
-        using var channel = GrpcChannel.ForAddress(_options.BrokerAddress);
+        using var channel = GrpcChannel.ForAddress(address);
         var client = new BrokerService.BrokerServiceClient(channel);
         using BrokerCall call = client.Subscribe(cancellationToken: token);
 
@@ -183,6 +199,7 @@ public class BrokerConnection
         }
 
         AssignedName = call.ResponseStream.Current.Registered.AssignedName;
+        _failuresInARow = 0;
         Console.Title = "receiver " + AssignedName;
         MessageProcessor processor = _processor ??= _createProcessor(AssignedName);
 

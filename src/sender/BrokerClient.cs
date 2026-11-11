@@ -9,69 +9,100 @@ namespace Pad.Sender;
 /// <summary>
 /// Conexiunea sender-ului catre broker, peste gRPC (Partea 2).
 ///
-/// Inainte (Partea 1) aici erau: Socket, LineReader, framing pe linii, serializare JSON
-/// scrisa de mana si citirea raspunsului linie cu linie. Toate acelea au disparut.
-/// Acum apelam trei metode generate automat din Protos/broker.proto:
+/// Cele trei metode vin din Protos/broker.proto:
+///   RegisterSender  -> ne inregistram si primim numele unic ("sender-1")
+///   SendMessage     -> trimitem un mesaj si primim ACK/NACK
+///   GetReceivers    -> aflam ce receiveri sunt conectati
 ///
-///   RegisterSender  -> ne inregistram si primim numele unic ("sender-1")   [inlocuieste HELLO]
-///   SendMessage     -> trimitem un mesaj si primim ACK/NACK                [inlocuieste WriteJson + ReadLine]
-///   GetReceivers    -> aflam ce receiveri sunt conectati                   [inlocuieste list_receivers]
+/// LOAD BALANCING: primim o LISTA de adrese de brokere. Lucram cu unul singur la un moment dat,
+/// iar cand acela raspunde UNAVAILABLE (e oprit sau a picat) trecem la urmatorul din lista
+/// si ne reinregistram acolo. Acelasi comportament il are si receiver-ul.
 ///
-/// Ce ramane neschimbat din Partea 1: un mesaj conteaza livrat DOAR dupa ACK,
-/// reincercam de Constants.MaxDeliveryAttempts ori, iar un NACK nu se reincearca.
+/// Ce ramane din Partea 1: un mesaj conteaza livrat DOAR dupa ACK, reincercam de
+/// Constants.MaxDeliveryAttempts ori, iar un NACK nu se reincearca niciodata.
 /// </summary>
 public class BrokerClient : IDisposable
 {
-    private readonly string _address;
+    private readonly IReadOnlyList<string> _addresses;
     private readonly string _baseName;
     private readonly Func<string, Logger> _createLogger;
 
     // Se creeaza la prima conectare, dupa ce aflam numele primit de la broker.
     private Logger _log = null!;
 
-    // Canalul gRPC tine conexiunea HTTP/2 si se reconecteaza SINGUR daca broker-ul
-    // repornește. De-aia nu mai avem nevoie de TryReconnect() scris de mana, ca la socket.
+    // Pe care broker din lista lucram acum.
+    private int _addressIndex;
+
     private GrpcChannel? _channel;
     private BrokerService.BrokerServiceClient? _client;
 
-    /// <summary>Numele dat de broker (ex. "sender-1"). Pana la prima conectare, numele cerut.</summary>
+    /// <summary>Numele dat de broker-ul curent (ex. "sender-1").</summary>
     public string Name { get; private set; }
 
-    public BrokerClient(string address, string baseName, Func<string, Logger> createLogger)
+    /// <summary>Adresa broker-ului pe care lucram acum (pentru mesaje si loguri).</summary>
+    public string CurrentAddress => _addresses[_addressIndex];
+
+    /// <summary>true daca avem mai multe brokere in lista, deci are sens sa vorbim de failover.</summary>
+    public bool HasFailover => _addresses.Count > 1;
+
+    public BrokerClient(IReadOnlyList<string> addresses, string baseName, Func<string, Logger> createLogger)
     {
-        _address = address;
+        if (addresses.Count == 0)
+            throw new ArgumentException("Trebuie cel putin o adresa de broker.", nameof(addresses));
+
+        _addresses = addresses;
         _baseName = baseName;
         _createLogger = createLogger;
         Name = baseName;
     }
 
-    /// <summary>Deschide canalul gRPC si se inregistreaza la broker.</summary>
+    /// <summary>Deschide canalul gRPC catre broker-ul curent si se inregistreaza la el.</summary>
     public void Connect()
     {
-        // 1. Canalul nu deschide inca nicio conexiune: o face la primul apel.
-        //    Il cream o singura data si il refolosim (asa se recomanda la gRPC).
-        _channel ??= GrpcChannel.ForAddress(_address);
+        // Canalul nu deschide inca nicio conexiune: o face la primul apel.
+        _channel ??= GrpcChannel.ForAddress(CurrentAddress);
         _client ??= new BrokerService.BrokerServiceClient(_channel);
 
-        // 2. Ne inregistram. Daca broker-ul nu ruleaza, aici primim RpcException(Unavailable).
+        // Daca broker-ul nu ruleaza, aici primim RpcException(Unavailable).
         RegisterReply reply = _client.RegisterSender(
             new RegisterSenderRequest { Name = _baseName },
             deadline: DateTime.UtcNow.Add(Constants.AckTimeout));
 
-        // 3. Broker-ul ne da numele unic: "sender" -> "sender-1", al doilea "sender-2".
         Name = string.IsNullOrEmpty(reply.AssignedName) ? _baseName : reply.AssignedName;
 
-        // Logul poarta numele primit. La o reconectare pastram acelasi fisier de log.
+        // Logul poarta primul nume primit si nu se schimba la failover,
+        // ca sa ramana totul intr-un singur fisier.
         _log ??= _createLogger(Name);
-        _log.Info("connected", result: $"ok {_address} ca {Name}");
+        _log.Info("connected", result: $"ok {CurrentAddress} ca {Name}");
     }
 
     /// <summary>
-    /// Ca Connect(), dar daca broker-ul nu ruleaza inca, asteapta si reincearca la 2 secunde
-    /// pana reuseste. Asa poti porni sender-ul inaintea broker-ului.
+    /// Trece la urmatorul broker din lista si deschide un canal nou catre el.
+    /// Nu se inregistreaza aici: o face apelantul, cand are nevoie.
+    /// </summary>
+    private void SwitchToNextBroker()
+    {
+        string previous = CurrentAddress;
+
+        _channel?.Dispose();
+        _channel = null;
+        _client = null;
+
+        _addressIndex = (_addressIndex + 1) % _addresses.Count;
+
+        if (HasFailover)
+            _log.Warn("broker_switch", result: $"{previous} indisponibil, trec pe {CurrentAddress}");
+    }
+
+    /// <summary>
+    /// Se conecteaza la primul broker care raspunde. Daca niciunul nu e pornit, le incearca
+    /// pe rand la nesfarsit, cu pauza dupa fiecare tur complet (Ctrl+C ca sa renunti).
+    /// Asa poti porni sender-ul inaintea brokerelor.
     /// </summary>
     public void ConnectWithWait()
     {
+        int failures = 0;
+
         while (true)
         {
             try
@@ -81,16 +112,32 @@ public class BrokerClient : IDisposable
             }
             catch (RpcException)
             {
-                Console.WriteLine($"Broker-ul nu raspunde pe {_address}. Reincerc in 2 secunde... (Ctrl+C pentru a renunta)");
-                Thread.Sleep(Constants.RetryDelay);
+                string failed = CurrentAddress;
+                failures++;
+
+                // Am incercat toate adresele o data? Atunci asteptam inainte de urmatorul tur.
+                bool cycleDone = failures % _addresses.Count == 0;
+
+                // Mutam indexul inainte sa afisam, ca sa putem spune cine urmeaza.
+                _channel?.Dispose();
+                _channel = null;
+                _client = null;
+                _addressIndex = (_addressIndex + 1) % _addresses.Count;
+
+                Console.WriteLine(cycleDone
+                    ? $"Niciun broker nu raspunde. Reincerc in {Constants.RetryDelay.TotalSeconds}s... (Ctrl+C pentru a renunta)"
+                    : $"Broker-ul {failed} nu raspunde, incerc {CurrentAddress}...");
+
+                if (cycleDone)
+                    Thread.Sleep(Constants.RetryDelay);
             }
         }
     }
 
     /// <summary>
-    /// Trimite mesajul si asteapta ACK. La timeout sau broker indisponibil reincearca
-    /// (maxim Constants.MaxDeliveryAttempts), cu pauza intre incercari.
-    /// Returneaza true daca a primit ACK.
+    /// Trimite mesajul si asteapta ACK. La timeout reincearca pe acelasi broker;
+    /// daca broker-ul e indisponibil, trece pe urmatorul din lista si reincearca acolo.
+    /// Maxim Constants.MaxDeliveryAttempts incercari. Returneaza true daca a primit ACK.
     /// </summary>
     public bool SendWithRetry(BrokerMessage message)
     {
@@ -100,8 +147,8 @@ public class BrokerClient : IDisposable
             try
             {
                 // Acelasi obiect (deci acelasi messageId) la fiecare incercare:
-                // daca ACK-ul s-a pierdut dar broker-ul a primit mesajul, el vede un duplicat
-                // si receiver-ul il poate arunca. Asta este livrarea "at-least-once".
+                // daca ACK-ul s-a pierdut dar broker-ul a primit mesajul, receiver-ul
+                // vede un duplicat si il arunca. Asta este livrarea "at-least-once".
                 SendReply reply = _client!.SendMessage(
                     message,
                     deadline: DateTime.UtcNow.Add(Constants.AckTimeout));
@@ -109,28 +156,32 @@ public class BrokerClient : IDisposable
                 if (reply.Status == Constants.StatusAck)
                 {
                     _log.Info("message_acked", message.CorrelationId, message.MessageId, message.MessageType,
-                              "ok", stopwatch.Elapsed);
+                              $"ok via {CurrentAddress}", stopwatch.Elapsed);
                     return true;
                 }
 
                 // NACK = broker-ul a primit mesajul, dar l-a respins (camp lipsa, tip necunoscut).
-                // Acelasi mesaj ar fi respins din nou, deci NU are sens sa reincercam.
+                // Acelasi mesaj ar fi respins si de alt broker, deci NU reincercam si NU schimbam brokerul.
                 _log.Warn("message_nacked", message.CorrelationId, message.MessageId, message.MessageType,
                           $"nack reason={reply.Reason}", stopwatch.Elapsed);
                 return false;
             }
             catch (RpcException ex) when (ex.StatusCode == StatusCode.DeadlineExceeded)
             {
-                // Nu a raspuns in Constants.AckTimeout. Echivalentul socket-ului care dadea TimedOut.
+                // Broker-ul traieste, dar nu a raspuns la timp: reincercam la acelasi.
                 _log.Warn("ack_timeout", message.CorrelationId, message.MessageId, message.MessageType,
-                          $"attempt={attempt}/{Constants.MaxDeliveryAttempts}", stopwatch.Elapsed);
+                          $"attempt={attempt}/{Constants.MaxDeliveryAttempts} {CurrentAddress}", stopwatch.Elapsed);
             }
             catch (RpcException ex)
             {
-                // Unavailable = broker-ul e oprit sau a picat conexiunea. Canalul gRPC se reface
-                // singur la urmatorul apel, deci doar asteptam si reincercam.
+                // Unavailable = broker-ul e oprit. Aici intervine load balancing-ul:
+                // trecem pe urmatorul broker si incercam sa ne inregistram la el.
                 _log.Warn("connection_lost", message.CorrelationId, message.MessageId, message.MessageType,
-                          $"attempt={attempt}/{Constants.MaxDeliveryAttempts} {ex.StatusCode}", stopwatch.Elapsed);
+                          $"attempt={attempt}/{Constants.MaxDeliveryAttempts} {CurrentAddress} {ex.StatusCode}",
+                          stopwatch.Elapsed);
+
+                SwitchToNextBroker();
+                TryRegister();
             }
 
             if (attempt < Constants.MaxDeliveryAttempts)
@@ -142,26 +193,54 @@ public class BrokerClient : IDisposable
         return false;
     }
 
-    /// <summary>
-    /// Intreaba broker-ul ce receiveri sunt conectati acum.
-    /// Daca broker-ul a picat intre timp, returneaza lista goala in loc sa arunce:
-    /// aplicatia nu trebuie sa cada doar pentru ca a intrebat cine e conectat.
-    /// </summary>
-    public List<string> ListReceivers()
+    /// <summary>Incearca sa se inregistreze la broker-ul curent, fara sa arunce daca nici el nu raspunde.</summary>
+    private void TryRegister()
     {
         try
         {
-            ListReceiverReply reply = _client!.GetReceivers(
-                new ListReceiversRequest(),
-                deadline: DateTime.UtcNow.Add(Constants.AckTimeout));
-
-            return reply.Receivers.ToList();
+            Connect();
         }
         catch (RpcException ex)
         {
-            _log.Warn("list_receivers_failed", result: ex.StatusCode.ToString());
-            return new List<string>();
+            _log.Warn("register_failed", result: $"{CurrentAddress}: {ex.StatusCode}");
         }
+    }
+
+    /// <summary>
+    /// Intreaba broker-ul curent ce receiveri sunt conectati acum.
+    /// Daca el a picat, trece pe urmatorul si mai incearca o data; daca nici acolo nu merge,
+    /// returneaza lista goala in loc sa arunce: aplicatia nu trebuie sa cada doar
+    /// pentru ca a intrebat cine e conectat.
+    /// </summary>
+    public List<string> ListReceivers()
+    {
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                ListReceiverReply reply = _client!.GetReceivers(
+                    new ListReceiversRequest(),
+                    deadline: DateTime.UtcNow.Add(Constants.AckTimeout));
+
+                return reply.Receivers.ToList();
+            }
+            catch (RpcException ex)
+            {
+                _log.Warn("list_receivers_failed", result: $"{CurrentAddress}: {ex.StatusCode}");
+
+                if (attempt == 1 && HasFailover)
+                {
+                    SwitchToNextBroker();
+                    TryRegister();
+                }
+                else
+                {
+                    return new List<string>();
+                }
+            }
+        }
+
+        return new List<string>();
     }
 
     public void Dispose()

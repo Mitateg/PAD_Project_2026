@@ -1,7 +1,12 @@
 # ADR-001: Transport TCP peste Socket brut, mesaje JSON delimitate prin newline
 
-**Status:** acceptat
+**Status:** inlocuit de [ADR-002](adr-002-grpc-si-protobuf.md) (2026-10-17)
 **Data:** 2026-09-17
+
+> Acest ADR descrie transportul din **Partea 1** a laboratorului si se pastreaza ca inregistrare
+> istorica: explica de ce s-a ales atunci socketul brut si framing-ul pe linii. Deciziile de mai jos
+> **nu mai sunt in vigoare** - vezi ADR-002 pentru transportul actual (gRPC). Nu modifica acest
+> fisier ca sa reflecte codul de azi; un ADR inlocuit ramane asa cum a fost scris.
 
 ## Context
 

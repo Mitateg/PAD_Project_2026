@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Collections.Concurrent;
 using Pad.Common;
 using Pad.Common.Grpc;
 using Grpc.Core;
@@ -14,7 +13,7 @@ public class AckResult
 }
 
 
-// Conexiunea broker-ului cu un receptor: socketul, abonarile, ACK-urile si coada lui proprie de livrare
+// Conexiunea broker-ului cu un receptor: stream-ul, abonarile, ACK-urile si coada lui proprie de livrare
 public class ReceiverConnection
 {
      public string Name { get; }
@@ -29,8 +28,8 @@ public class ReceiverConnection
      /// Mesajele de livrat catre ACEST receptor.
      public BlockingCollection<QueuedMessage> Outbox { get; } = new();
 
-     // Lock pentru a livra un singur mesaj odata la un receptor.
-     public readonly object _deliveryLock = new();
+     // SemaphoreSlim in loc de object lock, pentru compatibilitate cu async/await.
+     private readonly SemaphoreSlim _deliveryLock = new(1, 1);
 
      public bool IsConnected { get; private set; } = true;
 
@@ -41,18 +40,19 @@ public class ReceiverConnection
           _stream = stream;
      }
 
-     // Livrarea unui mesaj catre receptor prin gRPC stream si asteptarea ACK-ului.
-     public bool Deliver(BrokerMessage message)
+     // Livrarea este async, nu mai blocheaza fire din thread pool cu .Wait().
+     public async Task<bool> DeliverAsync(BrokerMessage message)
      {
-          lock (_deliveryLock)
+          await _deliveryLock.WaitAsync();
+          try
           {
                if (!IsConnected)
                     return false;
 
                try
                {
-                    // Trimitem mesajul prin stream-ul gRPC (sincron, cu .Wait())
-                    _stream.WriteAsync(new ServerEvent { Message = message }).Wait();
+                    // Trimitem mesajul prin stream-ul gRPC (async, fara .Wait())
+                    await _stream.WriteAsync(new ServerEvent { Message = message });
                }
                catch (Exception ex) when (ex is InvalidOperationException || ex is RpcException || ex.InnerException is RpcException)
                {
@@ -60,7 +60,7 @@ public class ReceiverConnection
                     return false;
                }
 
-               // Asteptam ACK, la fel ca inainte
+               // Asteptam ACK — TryTake cu timeout raman sincrone (blocheaza doar firul curent, dar sunt scurte si nu se pot face async pe BlockingCollection).
                while (Acks.TryTake(out AckResult? ack, Constants.AckTimeout))
                {
                     if (ack.MessageId == message.MessageId)
@@ -68,6 +68,10 @@ public class ReceiverConnection
                }
 
                return false;
+          }
+          finally
+          {
+               _deliveryLock.Release();
           }
      }
 

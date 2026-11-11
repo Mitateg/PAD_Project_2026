@@ -20,7 +20,7 @@ catch (Exception ex) when (ex is ArgumentException || ex is FormatException || e
 
 // Logul se creeaza dupa conectare, cu numele primit de la broker (ex. "sender-1"),
 // ca doi senderi porniti odata sa scrie in fisiere diferite.
-using var broker = new BrokerClient(options.BrokerAddress, options.Name,
+using var broker = new BrokerClient(options.BrokerAddresses, options.Name,
                                     assignedName => new Logger(assignedName, toConsole: false));
 
 // Asteptam broker-ul: daca nu ruleaza inca, reincercam pana porneste (Ctrl+C ca sa renunti).
@@ -30,7 +30,9 @@ Console.Title = "sender " + broker.Name;
 while (true)
 {
     Console.WriteLine();
-    Console.WriteLine($"=== SENDER \"{broker.Name}\" ===");
+    Console.WriteLine(broker.HasFailover
+        ? $"=== SENDER \"{broker.Name}\" === (broker: {broker.CurrentAddress})"
+        : $"=== SENDER \"{broker.Name}\" ===");
     Console.WriteLine("  1. Trimite mesaje automate (cate unul pentru fiecare destinatie)");
     Console.WriteLine("  2. Scriu eu mesajul");
     Console.WriteLine("  0. Iesire");

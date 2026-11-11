@@ -45,6 +45,15 @@ public class MessageSave : IDisposable
           }
      }
 
+     // Verifica daca un messageId exista deja in WAL (pentru deduplicarea retry-urilor sender-ului).
+     public bool ContainsMessage(string messageId)
+     {
+          lock (_lock)
+          {
+               return _live.ContainsKey(messageId);
+          }
+     }
+
      // Încarcă mesajele din fișierul de salvare
      public List<QueuedMessage> Recover()
      {
@@ -110,7 +119,7 @@ public class MessageSave : IDisposable
 
      private void Append(string line, bool fsync)
      {
-          _writer!.WriteLine(line + "\n");
+          _writer!.WriteLine(line);
           _writer!.Flush();
           if (fsync)
                _fileStream!.Flush(true);
@@ -198,7 +207,7 @@ public class MessageSave : IDisposable
      }
 
      // Serializare / deserializare BrokerMessage ca JSON (pentru WAL)
-     
+
      private static string SerializeBrokerMessage(BrokerMessage m)
      {
           return JsonSerializer.Serialize(new

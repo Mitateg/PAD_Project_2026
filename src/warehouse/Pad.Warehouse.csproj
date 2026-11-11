@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<!-- Warehouse (DW): nod HTTP care tine datele angajatilor.
+	     Straturi: Controller -> Service -> Data (repository in memorie sau Cassandra). -->
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>Pad.Warehouse</RootNamespace>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="CassandraCSharpDriver" Version="3.22.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\common\Pad.Common.csproj" />
+	</ItemGroup>
+
+</Project>

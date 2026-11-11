@@ -1,27 +1,92 @@
 # Fiecare serviciu are imaginea lui, construita din Dockerfile-ul propriu.
 #
+# FIX #4: Doi brokeri (broker1, broker2) pentru load balancing si failover.
+# Sender-ul si receiver-ul primesc ambele adrese prin --brokers si trec automat
+# la celalalt daca unul cade.
+#
 # Comenzi:
-#   docker compose up -d --build broker   # porneste broker-ul in fundal
-#   docker compose run --rm sender        # sender interactiv (meniu)
+#   docker compose up -d --build broker1 broker2   # porneste ambii brokeri
+#   docker compose run --rm sender                  # sender interactiv
 #   docker compose run --rm receiver --name ion --subscribe Anunt,Alerta
-#                                         # receiver interactiv; poti rula mai multe, in terminale diferite
-#   docker compose logs -f broker         # loguri broker
-#   docker compose down                   # opreste tot
+#   docker compose logs -f broker1 broker2          # loguri brokeri
+#   docker compose down                             # opreste tot
+#
+# Warehouse: Cassandra + 3 noduri warehouse care vad aceleasi date.
+# Porturile warehouse-urilor NU sunt publicate: doar proxy-ul va fi accesibil din exterior (8080).
+# Pentru a testa un nod direct, vezi comanda cu "run -p" de mai jos.
+#   docker compose up -d --build cassandra warehouse-1 warehouse-2 warehouse-3
+#   docker compose logs -f warehouse-1              # id-urile de fir apar in fiecare linie http_request
+#   docker compose run --rm -p 5000:5000 warehouse-1   # un nod expus temporar pe localhost:5000
 
 services:
-  broker:
+  broker1:
     build:
-      # Contextul este radacina repo-ului, pentru ca broker-ul foloseste si src/common.
       context: .
       dockerfile: src/broker/Dockerfile
     image: pad-broker
+    command: ["--port", "4242", "--name", "broker1", "--wal", "data/broker.wal"]
     ports:
       - "4242:4242"
     volumes:
-      # Logurile (inclusiv deadletter.log) raman pe calculator.
       - ./logs:/app/logs
-      # WAL-ul brokerului (mesajele necomplet livrate) supravietuieste la kill / restart.
-      - ./data:/app/data
+      - ./data/broker1:/app/data
+
+  broker2:
+    build:
+      context: .
+      dockerfile: src/broker/Dockerfile
+    image: pad-broker
+    command: ["--port", "4243", "--name", "broker2", "--wal", "data/broker.wal"]
+    ports:
+      - "4243:4243"
+    volumes:
+      - ./logs:/app/logs
+      - ./data/broker2:/app/data
+
+  # ---- Lab 3: warehouse ----
+
+  cassandra:
+    image: cassandra:4.1
+    environment:
+      # Heap mic, ca sa porneasca si pe un laptop. Ambele valori trebuie setate impreuna.
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra-data:/var/lib/cassandra     # datele raman si dupa `docker compose down`
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s                       # Cassandra chiar are nevoie de atat
+
+  warehouse-1: &warehouse
+    build:
+      context: .
+      dockerfile: src/warehouse/Dockerfile
+    image: pad-warehouse                      # aceeasi imagine pentru toate trei nodurile
+    environment: &warehouse-env
+      PAD_CASSANDRA_HOST: cassandra
+      PAD_WAREHOUSE_NAME: warehouse-1
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    expose:
+      - "5000"                                # vizibil doar in reteaua compose, NU pe calculatorul gazda
+    volumes:
+      - ./logs:/app/logs
+
+  warehouse-2:
+    <<: *warehouse
+    environment:
+      <<: *warehouse-env
+      PAD_WAREHOUSE_NAME: warehouse-2
+
+  warehouse-3:
+    <<: *warehouse
+    environment:
+      <<: *warehouse-env
+      PAD_WAREHOUSE_NAME: warehouse-3
 
   sender:
     build:
@@ -29,14 +94,14 @@ services:
       dockerfile: src/sender/Dockerfile
     image: pad-sender
     environment:
-      # In reteaua Docker, broker-ul se gaseste dupa numele serviciului.
-      PAD_BROKER_HOST: broker
+      PAD_BROKER_HOST: broker1
     depends_on:
-      - broker
-    # Sender-ul are meniu: are nevoie de STDIN deschis si de terminal.
+      - broker1
+      - broker2
+    # FIX #4: Sender-ul primeste ambele adrese ale brokerilor.
+    command: ["--brokers", "broker1:4242,broker2:4243"]
     stdin_open: true
     tty: true
-    # Nu porneste la "docker compose up"; il pornesti cand vrei sa trimiti ceva.
     profiles:
       - interactiv
     volumes:
@@ -48,12 +113,18 @@ services:
       dockerfile: src/receivers/Dockerfile
     image: pad-receiver
     environment:
-      PAD_BROKER_HOST: broker
+      PAD_BROKER_HOST: broker1
     depends_on:
-      - broker
+      - broker1
+      - broker2
+    # FIX #4: Receiver-ul primeste ambele adrese ale brokerilor.
+    command: ["--brokers", "broker1:4242,broker2:4243"]
     stdin_open: true
     tty: true
     profiles:
       - interactiv
     volumes:
       - ./logs:/app/logs
+
+volumes:
+  cassandra-data:

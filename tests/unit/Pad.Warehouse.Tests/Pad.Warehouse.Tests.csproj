@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- Teste unitare pentru warehouse: reguli de validare si paginare (EmployeeService)
+	     si comportamentul repository-ului din memorie. Fara HTTP, fara Cassandra. -->
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<IsPackable>false</IsPackable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+		<PackageReference Include="xunit" Version="2.9.2" />
+		<PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+	</ItemGroup>
+
+	<!-- Warehouse-ul este o aplicatie ASP.NET Core, deci proiectul de test are nevoie de acelasi framework. -->
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\..\src\common\Pad.Common.csproj" />
+		<ProjectReference Include="..\..\..\src\warehouse\Pad.Warehouse.csproj" />
+	</ItemGroup>
+
+</Project>

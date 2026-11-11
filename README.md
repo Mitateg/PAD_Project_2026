@@ -1,6 +1,8 @@
-﻿# PAD Laborator
+# PAD Laborator
 
-Un agent de mesaje publish/subscribe, construit peste socket-uri TCP create manual, în .NET. Proiectul are trei aplicații de consolă: **sender**, **broker** și **receiver**.
+Un agent de mesaje publish/subscribe în .NET 8, cu trei aplicații de consolă: **sender**, **broker** și **receiver**.
+
+Comunicarea se face prin **gRPC**, cu mesajele descrise în [`src/common/Protos/broker.proto`](src/common/Protos/broker.proto) și serializate cu **protobuf**. (În prima parte a laboratorului totul mergea peste socket-uri TCP scrise de mână, cu mesaje JSON delimitate prin linii; acel nivel a fost înlocuit de RPC-uri, dar comportamentul sistemului a rămas același.)
 
 - **Sender** construiește mesaje și le trimite broker-ului. Un mesaj e considerat trimis abia după ce broker-ul răspunde `ACK`, iar acel `ACK` înseamnă că mesajul este **salvat pe disc** (vezi [Persistență](#persistență-write-ahead-log)).
 - **Broker** validează fiecare mesaj, îl scrie în jurnalul de pe disc (WAL) și îl pune într-o coadă după `messageType`. Un worker pentru fiecare tip îl împarte receiver-ilor abonați, iar fiecare receiver are propriul fir de livrare, cu confirmare (ACK), retry și dead-letter.
@@ -77,19 +79,19 @@ Un mesaj pe care nu l-a primit nimeni rămâne în coadă până la TTL, deci un
 Broker-ul scrie fiecare mesaj acceptat în `data/broker.wal`, un fișier doar de adăugat (append-only), **înainte** de a trimite ACK sender-ului.
 
 ```
-ENQ|{json-ul mesajului}      mesaj acceptat (cu fsync)
-ACK|{messageId}|{receiver}   receiver-ul a confirmat mesajul
-DONE|{messageId}             mesaj terminat: livrat sau dead-letter
+ENQUEUE: {json-ul mesajului}   mesaj acceptat (cu fsync)
+ACK: {messageId} {receiver}    receiver-ul a confirmat mesajul
+DONE: {messageId}              mesaj terminat: livrat sau dead-letter
 ```
 
-La pornire, broker-ul citește fișierul și pune înapoi în cozi mesajele care au `ENQ` și nu au `DONE`, cu confirmările deja primite. Apoi rescrie fișierul compact, doar cu mesajele rămase. Fișierul se compactează și la fiecare 500 de mesaje terminate.
+La pornire, broker-ul citește fișierul și pune înapoi în cozi mesajele care au `ENQUEUE` și nu au `DONE`, cu confirmările deja primite. Apoi rescrie fișierul compact, doar cu mesajele rămase. Fișierul se compactează și la fiecare 500 de mesaje terminate.
 
 | Eveniment | Ce se întâmplă |
 |-----------|----------------|
 | `kill -9` cu mesaje necitite | La repornire mesajele sunt reîncărcate și livrate |
 | `kill -9` în timpul scrierii | Ultima linie ruptă este ignorată |
 | Cădere după procesare, înainte de ACK | Mesajul se retrimite; receiver-ul îl ignoră după `messageId` |
-| Pierderea curentului | `ENQ` are fsync și rezistă; `ACK`/`DONE` pot lipsi, ceea ce duce doar la o retrimitere |
+| Pierderea curentului | `ENQUEUE` are fsync și rezistă; `ACK`/`DONE` pot lipsi, ceea ce duce doar la o retrimitere |
 
 Limite: persistența este locală, pe un singur nod, fără replicare. După o repornire, termenul TTL al mesajelor recuperate pornește de la zero.
 
@@ -115,21 +117,47 @@ dotnet run --project src/sender
 
 Poți porni oricâți senderi și receiveri vrei, fiecare în propriul terminal. Broker-ul creează singur folderele `logs/` și `data/` în directorul din care îl pornești.
 
+### Load balancing (mai multe brokere)
+
+Sistemul poate rula cu mai multe brokere. Sender-ul și receiver-ul primesc o **listă de adrese** și trec singuri la următorul când cel curent răspunde `UNAVAILABLE`.
+
+```bash
+# Terminal 1 și 2: două brokere, fiecare cu portul și WAL-ul lui
+dotnet run --project src/broker -- --port 4242 --name broker-1
+dotnet run --project src/broker -- --port 4243 --name broker-2
+
+# Terminal 3 și 4: clienții primesc ambele adrese, în ordinea în care le încearcă
+dotnet run --project src/sender    -- --brokers localhost:4242,localhost:4243
+dotnet run --project src/receivers -- --brokers localhost:4242,localhost:4243 --name ion --subscribe Anunt
+```
+
+Aceeași listă se poate da și prin variabila de mediu `PAD_BROKER_ADDRESSES`.
+
+Lista fiind **ordonată**, al doilea broker se comportă natural ca o rezervă: toți clienții pornesc de la prima adresă și ajung la a doua abia când prima nu mai răspunde.
+
+Cum se comportă la o cădere:
+
+- **La pornire** — dacă primul broker nu răspunde, clientul trece imediat la următorul. Abia după ce le-a încercat pe toate fără succes face o pauză și reia turul.
+- **În timpul rulării** — sender-ul comută pe următorul broker și se reînregistrează acolo (deci poate primi alt nume, de exemplu `sender-2`). Receiver-ul se reconectează la alt broker și își reface abonările.
+- **Un `NACK` nu declanșează comutarea**: mesajul a fost refuzat pe fond (câmp lipsă, tip necunoscut), deci ar fi refuzat la fel de orice broker.
+
+Brokerele **nu își împart starea între ele**. Fiecare are coada și WAL-ul lui, deci un mesaj trimis către `broker-1` nu ajunge la receiverii conectați doar la `broker-2`. Pentru demonstrație, conectează clienții la aceeași listă de adrese.
+
 ### Rulare cu Docker Compose
 
 ```bash
-docker compose up -d --build broker        # pornește broker-ul în fundal
-docker compose run --rm sender             # sender interactiv
+docker compose up -d --build broker1 broker2   # pornește ambii brokeri în fundal
+docker compose run --rm sender                  # sender interactiv
 docker compose run --rm receiver --name ion --subscribe Anunt,Alerta
-docker compose logs -f broker              # urmărește logurile broker-ului
-docker compose down                        # oprește tot
+docker compose logs -f broker1 broker2          # urmărește logurile brokerilor
+docker compose down                             # oprește tot
 ```
 
 Note:
 
-- Compose setează `PAD_BROKER_HOST=broker` pentru sender și receiver, deci ele găsesc broker-ul după numele serviciului.
+- Compose definește două brokere, `broker1` (`4242`) și `broker2` (`4243`). Sender-ul și receiver-ul primesc ambele adrese prin `--brokers broker1:4242,broker2:4243` și trec singuri la al doilea dacă primul cade. `PAD_BROKER_HOST=broker1` rămâne doar ca valoare implicită.
 - Folderul `./logs` de pe calculatorul tău este montat în fiecare container, deci logurile și dead letters rămân după oprirea containerelor.
-- Folderul `./data` este montat în containerul broker-ului. Acolo trăiește `broker.wal`, deci mesajele necomplet livrate supraviețuiesc repornirii sau ștergerii containerului. Dacă ștergi `./data`, ștergi și mesajele salvate.
+- Folderele `./data/broker1` și `./data/broker2` sunt montate în containerele brokerilor. Acolo trăiește `broker.wal` al fiecăruia, deci mesajele necomplet livrate supraviețuiesc repornirii sau ștergerii containerului. Dacă ștergi `./data`, ștergi și mesajele salvate.
 - Serviciile sender și receiver folosesc profilul `interactiv`, așa că `docker compose up` nu le pornește. Le pornești cu `run` când ai nevoie.
 
 ### Rulare a unei singure imagini
@@ -150,12 +178,19 @@ docker run --rm -it --network host pad-receiver --name ion --subscribe Anunt,Ale
 
 ### Broker
 
-Broker-ul nu primește argumente. Ascultă pe portul **4242**, sau pe **4243** dacă 4242 este deja ocupat.
+| Opțiune | Implicit | Descriere |
+|---------|----------|-----------|
+| `--port` | `4242` | Portul gRPC pe care ascultă |
+| `--name` | `broker` | Numele din loguri, deci și fișierul `logs/<name>.log` |
+| `--wal` | `data/<name>.wal` | Fișierul write-ahead log |
+
+Fiecare instanță primește automat un WAL după numele ei, deci două brokere pornite cu `--name` diferit nu se bat pe același fișier.
 
 ### Sender
 
 | Opțiune | Implicit | Descriere |
 |---------|----------|-----------|
+| `--brokers` | `PAD_BROKER_ADDRESSES`, altfel `--host:--port` | Listă de brokere separate prin virgulă, ex. `localhost:4242,localhost:4243`. Vezi [Load balancing](#load-balancing-mai-multe-brokere) |
 | `--host` | `PAD_BROKER_HOST`, altfel `127.0.0.1` | Adresa broker-ului (IP sau nume de host) |
 | `--port` | `4242` | Portul broker-ului |
 | `--name` | `sender` | Numele cerut; broker-ul îl face unic (`sender-1`, `sender-2`, ...) |
@@ -165,6 +200,7 @@ Broker-ul nu primește argumente. Ascultă pe portul **4242**, sau pe **4243** d
 | Opțiune | Implicit | Descriere |
 |---------|----------|-----------|
 | `--name` | întrebat interactiv | Numele cerut; broker-ul îl face unic (`ion` devine `ion-1`) |
+| `--brokers` | `PAD_BROKER_ADDRESSES`, altfel `--host:--port` | Listă de brokere separate prin virgulă. Vezi [Load balancing](#load-balancing-mai-multe-brokere) |
 | `--host` | `PAD_BROKER_HOST`, altfel `localhost` | Adresa broker-ului (IP sau nume de host) |
 | `--port` | `4242` | Portul broker-ului |
 | `--subscribe` | niciunul | Tipuri publice separate prin virgulă, ex. `Anunt,Alerta` |
@@ -264,22 +300,144 @@ Un receiver care nu trimite ACK își consumă cele 3 încercări (`delivery_fai
 | `logs/<sender>.log` | Evenimentele fiecărui sender (`message_acked`, `ack_timeout`, `message_failed`) |
 | `logs/<receiver>.log` | Evenimentele tehnice ale receiver-ului |
 | `logs/processed-<receiver>.log` | Mesajele procesate de receiver; din el se reface deduplicarea după repornire |
-| `data/broker.wal` | Jurnalul mesajelor necomplet livrate (nu se editează manual) |
+| `data/<broker>.wal` | Jurnalul mesajelor necomplet livrate, câte unul pentru fiecare broker (nu se editează manual) |
 
-Format de log: `timestamp | nivel | componentă | eveniment | corr | msg | type | rezultat | durată`. Merită adăugat `data/` și `logs/` în `.gitignore`.
+Format de log: `timestamp | nivel | componentă | eveniment | corr | msg | type | rezultat | durată`. Folderele `data/` și `logs/` sunt deja în `.gitignore`, deci artefactele de rulare nu ajung în git.
+
+## Warehouse (Lab 3)
+
+Un nod HTTP (`src/warehouse`) care ține datele angajaților. Are trei straturi, ca în enunț:
+
+```
+Controllers/EmployeeController.cs   cererea HTTP -> apel la serviciu -> răspuns HTTP (fără logică, fără stare)
+Services/EmployeeService.cs         validări, reguli de paginare
+Data/IEmployeeRepository.cs         interfața de stocare
+Data/InMemoryEmployeeRepository.cs  date în memorie (pentru dezvoltare și teste)
+Data/CassandraEmployeeRepository.cs date în Cassandra, partajate de toate nodurile
+```
+
+Stocarea se alege la pornire, într-un singur loc (`Program.cs`): dacă `PAD_CASSANDRA_HOST` este setat se folosește Cassandra, altfel memoria. Controller-ul și serviciul nu se schimbă.
+
+### Endpoint-uri
+
+Contractul complet este în [`contracts/warehouse-v1.md`](contracts/warehouse-v1.md).
+
+| Metodă | Cale | Rol | Răspunsuri |
+|--------|------|-----|------------|
+| `GET` | `/employee/?id=1` | Un angajat | `200`, `404`, `400` |
+| `GET` | `/employees/?offset=0&limit=10` | O pagină de angajați | `200` (lista poate fi goală), `400` |
+| `PUT` | `/employee/` | Creare sau înlocuire (idempotent) | `201` prima dată, `200` după, `400`, `415` |
+| `POST` | `/employee/?id=1` | Modificare parțială: doar câmpurile trimise | `200`, `404`, `400` |
+| `GET` | `/update/employees/` cu antetul `If-Modified-Since: Sat, 29 Oct 2014 19:43:31 GMT` | Ce s-a schimbat după acel moment (pull-request, ca în enunț) | `200`, `400` |
+| `GET` | `/health` | `200` doar dacă stocarea chiar răspunde | `200`, `503` |
+
+- **JSON sau XML:** clientul alege prin `Accept: application/json` sau `Accept: application/xml`. Un `Accept` pe care nu-l putem produce (ex. `text/plain`) primește `406`. Corpul unui `PUT` poate fi la fel JSON sau XML (după `Content-Type`).
+- **Pull-request:** momentul se trimite în antetul `If-Modified-Since` (dată HTTP, ca în enunț; se acceptă și ISO-8601). Ca variantă, merge și `?since=2026-11-09T10:00:00Z`; dacă vin amândouă, câștigă antetul. Un antet care nu e dată dă `400`; fără niciunul dintre ele, tot `400`. Data HTTP are rezoluție de o secundă, iar ziua săptămânii se ignoră (exemplul din enunț, „Sat, 29 Oct 2014", are ziua greșită: a fost miercuri). Antetul `From` (ex. `nodename@hostdomain`) apare în log, ca să se vadă cine a cerut.
+- **Paginare:** `limit` implicit `10`, maxim `100`. Un `limit` mai mare **nu dă eroare, este redus la 100**. `offset` negativ sau `limit` sub 1 dau `400`.
+- **`PUT` este idempotent:** același `PUT` de două ori dă `201` și apoi `200`, fără eroare și fără dublură. Contează, pentru că proxy-ul reîncearcă pe alt nod când unul cade.
+- **`POST` nu șterge ce nu trimiți:** `{"name":"X"}` schimbă doar numele.
+- **Mesaje în altă ordine:** dacă un `PUT` poartă `updatedAt`, acela este momentul scrierii. O schimbare mai veche nu mai suprascrie una mai nouă, chiar dacă ajunge după ea. În Cassandra asta se face cu `USING TIMESTAMP`, iar bridge-ul trebuie să pună `OccurredAt`-ul mesajului din broker în `updatedAt`.
+
+### Variabile de mediu
+
+| Variabilă | Implicit | Rol |
+|-----------|----------|-----|
+| `PAD_PORT` | `5000` | Portul HTTP |
+| `PAD_CASSANDRA_HOST` | nesetată | Adresa Cassandra. Fără ea, datele stau în memorie |
+| `PAD_WAREHOUSE_NAME` | `warehouse` | Numele din loguri (`logs/<nume>.log`), util cu mai multe noduri |
+
+### Pornire
+
+```bash
+# Local, cu date în memorie
+dotnet run --project src/warehouse
+
+# Cu Docker: Cassandra + 3 noduri (Cassandra are nevoie de 30-60 s să pornească)
+docker compose up -d --build cassandra warehouse-1 warehouse-2 warehouse-3
+
+# Un nod expus temporar pe localhost:5000
+docker compose run --rm -p 5000:5000 warehouse-1
+```
+
+Porturile nodurilor din Docker **nu sunt publicate**: din exterior se ajunge la ele doar prin proxy (portul `8080`).
+
+Verificare cu `curl`:
+
+```bash
+curl -i -X PUT -H "Content-Type: application/json" \
+     -d '{"id":1,"name":"Ana","position":"Dev","department":"IT"}' http://localhost:5000/employee/   # 201
+curl -i -X PUT -H "Content-Type: application/json" \
+     -d '{"id":1,"name":"Ana","position":"Dev","department":"IT"}' http://localhost:5000/employee/   # 200
+curl -i -X POST -H "Content-Type: application/json" -d '{"name":"Ana B"}' "http://localhost:5000/employee/?id=1"
+curl -H "Accept: application/xml"  "http://localhost:5000/employee/?id=1"
+curl -i -H "Accept: text/plain"    "http://localhost:5000/employee/?id=1"                            # 406
+curl -H "If-Modified-Since: Sat, 29 Oct 2014 19:43:31 GMT" -H "From: nodename@hostdomain" \
+     http://localhost:5000/update/employees/                                                        # pull-request
+```
+
+### Procesare concurentă
+
+Kestrel servește fiecare cerere pe un fir din pool (un fir pe cerere). Controller-ele nu țin stare între cereri, iar starea partajată este thread-safe (`ConcurrentDictionary` în memorie, Cassandra în cealaltă variantă). Fiecare cerere scrie în `logs/<nume>.log` o linie `http_request ... thread=<id>`: la mai mulți clienți simultani apar multe id-uri diferite.
+
+### Limitări
+
+- **Cassandra nu are `OFFSET`.** Pentru `offset=o&limit=l` se citesc primele `o+l` rânduri și se sar primele `o`. La scara laboratorului este acceptabil, dar la offset-uri mari ar fi lent. Ordinea paginilor este cea a token-urilor cheii primare: stabilă între cereri, dar nu sortată după `id` (în varianta din memorie, lista e sortată după `id`).
+- **`/update/employees/`** folosește tabelul `employee_changes` cu un singur bucket (`all`), suficient la această scară.
+- Un mesaj `EmployeeChange` pe care nu-l primește niciun abonat ajunge în dead-letter după `MessageTtl` (5 min). Dacă bridge-ul este oprit mai mult, schimbările rămân în `logs/deadletter.log`.
 
 ## Teste
 
-Testele unitare acoperă `Pad.Common` (serializare JSON, validarea mesajelor și framing-ul pe linii):
+Rulezi tot cu o singură comandă:
 
 ```bash
 dotnet test
 ```
 
-| Clasă de test | Ce verifică |
-|---------------|-------------|
-| `MessageSerializationTests` | câmpuri camelCase, o singură linie, dus-întors complet, JSON-ul exact al unui ACK |
-| `MessageValidatorTests` | mesaj valid, JSON greșit, câmpuri lipsă, tip necunoscut |
-| `LineReaderTests` | linii reconstruite din bucăți TCP, pe un socket real de loopback |
+Sunt patru proiecte de test:
+
+| Proiect | Ce acoperă |
+|---------|------------|
+| `tests/unit/Pad.Common.Tests` | serializarea protobuf și validarea mesajelor |
+| `tests/unit/Pad.Warehouse.Tests` | regulile serviciului warehouse (id invalid, paginare, `PUT` idempotent, `POST` parțial) |
+| `tests/contract/Pad.Contract.Tests` | exemplele din contract rămân valide |
+| `tests/integration/Pad.Integration.Tests` | sistemul întreg: un broker gRPC adevărat și un warehouse HTTP adevărat |
+
+**Testele de integrare** pornesc un broker real pe un port liber, îi conectează sender-ul adevărat (`Pad.Sender.BrokerClient`) și un receiver de test, apoi verifică:
+
+| Test | Ce demonstrează |
+|------|-----------------|
+| `FluxComplet_MesajulAjungeLaReceiverSiEsteConfirmat` | drumul complet sender → broker → receiver, cu `ACK` și `correlationId` păstrat |
+| `ReceiverDeconectatInainteDeAck_MesajulEsteRelivrat` | un receiver care cade înainte de `ACK` primește mesajul din nou la reconectare |
+| `BrokerRepornit_MesajeleSuntRecuperateDinWal` | mesajele nelivrate supraviețuiesc opririi broker-ului și sunt livrate după repornire |
+| `AcelasiMessageIdTrimisDeDouaOri_NuProduceDublura` | retrimiterea aceluiași `messageId` primește `ACK`, dar receiver-ul îl vede o singură dată |
+
+Fiecare test își are propriul port și propriul fișier WAL, într-un folder temporar șters la final, deci testele nu se influențează între ele.
+
+**Testele warehouse-ului** (`WarehouseFlowTests`) pornesc un warehouse real pe un port liber și îi trimit cereri HTTP:
+
+| Test | Ce demonstrează |
+|------|-----------------|
+| `Put_PrimaOaraDa201_ApoiAceeasiCerere200_FaraDublura` | `PUT` idempotent: `201`, apoi `200`, un singur angajat |
+| `Put_ScriereMaiVeche_NuSuprascrieCeaMaiNoua` | o schimbare ajunsă în altă ordine nu strică datele mai noi |
+| `Accept_Json_...`, `Accept_Xml_...`, `Accept_Nesuportat_Da406` | formatul îl alege clientul; un `Accept` necunoscut primește `406` |
+| `CereriInvalide_Dau400`, `Get_Inexistent_Da404`, `Put_ContentTypeNesuportat_Da415` | codurile de eroare din contract |
+| `List_FaraParametri_Da10_SiLimitPesteMaxim_EsteRedusLa100` | regulile de paginare |
+| `Post_DoarNumele_PastreazaPozitiaSiDepartamentul` | `POST` modifică doar câmpurile trimise |
+| `Put_50DeCereriInParalel_ToateSuntSalvate` | concurență: 50 de `PUT`-uri simultane, toate salvate |
+| `Since_AntetIfModifiedSince_...`, `Since_ExempluDinEnunt_...`, `Since_AntetInvalid_Da400` | pull-request cu antetul `If-Modified-Since` (inclusiv exemplul din enunț și antetul invalid) |
+
+Testele rulează pe repository-ul din memorie. Varianta Cassandra se verifică manual (Docker Compose, vezi mai sus): datele supraviețuiesc unui `docker compose restart warehouse-2`, iar nodurile `warehouse-1` și `warehouse-2` văd aceleași date.
+
+## Decizii de arhitectură
+
+Motivele din spatele alegerilor tehnice sunt în [`docs/adr/`](docs/adr/):
+
+| ADR | Decizie | Status |
+|-----|---------|--------|
+| [001](docs/adr/adr-001-tcp-si-framing.md) | Socket TCP brut, mesaje JSON pe linii | înlocuit de 002 |
+| [002](docs/adr/adr-002-grpc-si-protobuf.md) | gRPC peste HTTP/2, contract protobuf | acceptat |
+| [003](docs/adr/adr-003-load-balancing.md) | Failover pe client, cu listă ordonată de brokere | acceptat |
+
+ADR-001 descrie Partea 1 și se păstrează ca înregistrare istorică: arată de ce s-a ales atunci socketul brut. Nu se rescrie când codul se schimbă.
 
 Comportamentul broker-ului (persistență, retry, dead-letter) se verifică manual cu scenariile din secțiunea [Scenarii de eșec](#scenarii-de-eșec-demonstrații).

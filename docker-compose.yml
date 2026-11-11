@@ -10,6 +10,13 @@
 #   docker compose run --rm receiver --name ion --subscribe Anunt,Alerta
 #   docker compose logs -f broker1 broker2          # loguri brokeri
 #   docker compose down                             # opreste tot
+#
+# Warehouse: Cassandra + 3 noduri warehouse care vad aceleasi date.
+# Porturile warehouse-urilor NU sunt publicate: doar proxy-ul va fi accesibil din exterior (8080).
+# Pentru a testa un nod direct, vezi comanda cu "run -p" de mai jos.
+#   docker compose up -d --build cassandra warehouse-1 warehouse-2 warehouse-3
+#   docker compose logs -f warehouse-1              # id-urile de fir apar in fiecare linie http_request
+#   docker compose run --rm -p 5000:5000 warehouse-1   # un nod expus temporar pe localhost:5000
 
 services:
   broker1:
@@ -35,6 +42,51 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data/broker2:/app/data
+
+  # ---- Lab 3: warehouse ----
+
+  cassandra:
+    image: cassandra:4.1
+    environment:
+      # Heap mic, ca sa porneasca si pe un laptop. Ambele valori trebuie setate impreuna.
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra-data:/var/lib/cassandra     # datele raman si dupa `docker compose down`
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s                       # Cassandra chiar are nevoie de atat
+
+  warehouse-1: &warehouse
+    build:
+      context: .
+      dockerfile: src/warehouse/Dockerfile
+    image: pad-warehouse                      # aceeasi imagine pentru toate trei nodurile
+    environment: &warehouse-env
+      PAD_CASSANDRA_HOST: cassandra
+      PAD_WAREHOUSE_NAME: warehouse-1
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    expose:
+      - "5000"                                # vizibil doar in reteaua compose, NU pe calculatorul gazda
+    volumes:
+      - ./logs:/app/logs
+
+  warehouse-2:
+    <<: *warehouse
+    environment:
+      <<: *warehouse-env
+      PAD_WAREHOUSE_NAME: warehouse-2
+
+  warehouse-3:
+    <<: *warehouse
+    environment:
+      <<: *warehouse-env
+      PAD_WAREHOUSE_NAME: warehouse-3
 
   sender:
     build:
@@ -73,3 +125,6 @@ services:
       - interactiv
     volumes:
       - ./logs:/app/logs
+
+volumes:
+  cassandra-data:

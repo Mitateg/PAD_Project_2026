@@ -79,19 +79,19 @@ Un mesaj pe care nu l-a primit nimeni rămâne în coadă până la TTL, deci un
 Broker-ul scrie fiecare mesaj acceptat în `data/broker.wal`, un fișier doar de adăugat (append-only), **înainte** de a trimite ACK sender-ului.
 
 ```
-ENQ|{json-ul mesajului}      mesaj acceptat (cu fsync)
-ACK|{messageId}|{receiver}   receiver-ul a confirmat mesajul
-DONE|{messageId}             mesaj terminat: livrat sau dead-letter
+ENQUEUE: {json-ul mesajului}   mesaj acceptat (cu fsync)
+ACK: {messageId} {receiver}    receiver-ul a confirmat mesajul
+DONE: {messageId}              mesaj terminat: livrat sau dead-letter
 ```
 
-La pornire, broker-ul citește fișierul și pune înapoi în cozi mesajele care au `ENQ` și nu au `DONE`, cu confirmările deja primite. Apoi rescrie fișierul compact, doar cu mesajele rămase. Fișierul se compactează și la fiecare 500 de mesaje terminate.
+La pornire, broker-ul citește fișierul și pune înapoi în cozi mesajele care au `ENQUEUE` și nu au `DONE`, cu confirmările deja primite. Apoi rescrie fișierul compact, doar cu mesajele rămase. Fișierul se compactează și la fiecare 500 de mesaje terminate.
 
 | Eveniment | Ce se întâmplă |
 |-----------|----------------|
 | `kill -9` cu mesaje necitite | La repornire mesajele sunt reîncărcate și livrate |
 | `kill -9` în timpul scrierii | Ultima linie ruptă este ignorată |
 | Cădere după procesare, înainte de ACK | Mesajul se retrimite; receiver-ul îl ignoră după `messageId` |
-| Pierderea curentului | `ENQ` are fsync și rezistă; `ACK`/`DONE` pot lipsi, ceea ce duce doar la o retrimitere |
+| Pierderea curentului | `ENQUEUE` are fsync și rezistă; `ACK`/`DONE` pot lipsi, ceea ce duce doar la o retrimitere |
 
 Limite: persistența este locală, pe un singur nod, fără replicare. După o repornire, termenul TTL al mesajelor recuperate pornește de la zero.
 
@@ -146,18 +146,18 @@ Brokerele **nu își împart starea între ele**. Fiecare are coada și WAL-ul l
 ### Rulare cu Docker Compose
 
 ```bash
-docker compose up -d --build broker        # pornește broker-ul în fundal
-docker compose run --rm sender             # sender interactiv
+docker compose up -d --build broker1 broker2   # pornește ambii brokeri în fundal
+docker compose run --rm sender                  # sender interactiv
 docker compose run --rm receiver --name ion --subscribe Anunt,Alerta
-docker compose logs -f broker              # urmărește logurile broker-ului
-docker compose down                        # oprește tot
+docker compose logs -f broker1 broker2          # urmărește logurile brokerilor
+docker compose down                             # oprește tot
 ```
 
 Note:
 
-- Compose setează `PAD_BROKER_HOST=broker` pentru sender și receiver, deci ele găsesc broker-ul după numele serviciului.
+- Compose definește două brokere, `broker1` (`4242`) și `broker2` (`4243`). Sender-ul și receiver-ul primesc ambele adrese prin `--brokers broker1:4242,broker2:4243` și trec singuri la al doilea dacă primul cade. `PAD_BROKER_HOST=broker1` rămâne doar ca valoare implicită.
 - Folderul `./logs` de pe calculatorul tău este montat în fiecare container, deci logurile și dead letters rămân după oprirea containerelor.
-- Folderul `./data` este montat în containerul broker-ului. Acolo trăiește `broker.wal`, deci mesajele necomplet livrate supraviețuiesc repornirii sau ștergerii containerului. Dacă ștergi `./data`, ștergi și mesajele salvate.
+- Folderele `./data/broker1` și `./data/broker2` sunt montate în containerele brokerilor. Acolo trăiește `broker.wal` al fiecăruia, deci mesajele necomplet livrate supraviețuiesc repornirii sau ștergerii containerului. Dacă ștergi `./data`, ștergi și mesajele salvate.
 - Serviciile sender și receiver folosesc profilul `interactiv`, așa că `docker compose up` nu le pornește. Le pornești cu `run` când ai nevoie.
 
 ### Rulare a unei singure imagini
@@ -304,6 +304,87 @@ Un receiver care nu trimite ACK își consumă cele 3 încercări (`delivery_fai
 
 Format de log: `timestamp | nivel | componentă | eveniment | corr | msg | type | rezultat | durată`. Folderele `data/` și `logs/` sunt deja în `.gitignore`, deci artefactele de rulare nu ajung în git.
 
+## Warehouse (Lab 3)
+
+Un nod HTTP (`src/warehouse`) care ține datele angajaților. Are trei straturi, ca în enunț:
+
+```
+Controllers/EmployeeController.cs   cererea HTTP -> apel la serviciu -> răspuns HTTP (fără logică, fără stare)
+Services/EmployeeService.cs         validări, reguli de paginare
+Data/IEmployeeRepository.cs         interfața de stocare
+Data/InMemoryEmployeeRepository.cs  date în memorie (pentru dezvoltare și teste)
+Data/CassandraEmployeeRepository.cs date în Cassandra, partajate de toate nodurile
+```
+
+Stocarea se alege la pornire, într-un singur loc (`Program.cs`): dacă `PAD_CASSANDRA_HOST` este setat se folosește Cassandra, altfel memoria. Controller-ul și serviciul nu se schimbă.
+
+### Endpoint-uri
+
+Contractul complet este în [`contracts/warehouse-v1.md`](contracts/warehouse-v1.md).
+
+| Metodă | Cale | Rol | Răspunsuri |
+|--------|------|-----|------------|
+| `GET` | `/employee/?id=1` | Un angajat | `200`, `404`, `400` |
+| `GET` | `/employees/?offset=0&limit=10` | O pagină de angajați | `200` (lista poate fi goală), `400` |
+| `PUT` | `/employee/` | Creare sau înlocuire (idempotent) | `201` prima dată, `200` după, `400`, `415` |
+| `POST` | `/employee/?id=1` | Modificare parțială: doar câmpurile trimise | `200`, `404`, `400` |
+| `GET` | `/update/employees/` cu antetul `If-Modified-Since: Sat, 29 Oct 2014 19:43:31 GMT` | Ce s-a schimbat după acel moment (pull-request, ca în enunț) | `200`, `400` |
+| `GET` | `/health` | `200` doar dacă stocarea chiar răspunde | `200`, `503` |
+
+- **JSON sau XML:** clientul alege prin `Accept: application/json` sau `Accept: application/xml`. Un `Accept` pe care nu-l putem produce (ex. `text/plain`) primește `406`. Corpul unui `PUT` poate fi la fel JSON sau XML (după `Content-Type`).
+- **Pull-request:** momentul se trimite în antetul `If-Modified-Since` (dată HTTP, ca în enunț; se acceptă și ISO-8601). Ca variantă, merge și `?since=2026-11-09T10:00:00Z`; dacă vin amândouă, câștigă antetul. Un antet care nu e dată dă `400`; fără niciunul dintre ele, tot `400`. Data HTTP are rezoluție de o secundă, iar ziua săptămânii se ignoră (exemplul din enunț, „Sat, 29 Oct 2014", are ziua greșită: a fost miercuri). Antetul `From` (ex. `nodename@hostdomain`) apare în log, ca să se vadă cine a cerut.
+- **Paginare:** `limit` implicit `10`, maxim `100`. Un `limit` mai mare **nu dă eroare, este redus la 100**. `offset` negativ sau `limit` sub 1 dau `400`.
+- **`PUT` este idempotent:** același `PUT` de două ori dă `201` și apoi `200`, fără eroare și fără dublură. Contează, pentru că proxy-ul reîncearcă pe alt nod când unul cade.
+- **`POST` nu șterge ce nu trimiți:** `{"name":"X"}` schimbă doar numele.
+- **Mesaje în altă ordine:** dacă un `PUT` poartă `updatedAt`, acela este momentul scrierii. O schimbare mai veche nu mai suprascrie una mai nouă, chiar dacă ajunge după ea. În Cassandra asta se face cu `USING TIMESTAMP`, iar bridge-ul trebuie să pună `OccurredAt`-ul mesajului din broker în `updatedAt`.
+
+### Variabile de mediu
+
+| Variabilă | Implicit | Rol |
+|-----------|----------|-----|
+| `PAD_PORT` | `5000` | Portul HTTP |
+| `PAD_CASSANDRA_HOST` | nesetată | Adresa Cassandra. Fără ea, datele stau în memorie |
+| `PAD_WAREHOUSE_NAME` | `warehouse` | Numele din loguri (`logs/<nume>.log`), util cu mai multe noduri |
+
+### Pornire
+
+```bash
+# Local, cu date în memorie
+dotnet run --project src/warehouse
+
+# Cu Docker: Cassandra + 3 noduri (Cassandra are nevoie de 30-60 s să pornească)
+docker compose up -d --build cassandra warehouse-1 warehouse-2 warehouse-3
+
+# Un nod expus temporar pe localhost:5000
+docker compose run --rm -p 5000:5000 warehouse-1
+```
+
+Porturile nodurilor din Docker **nu sunt publicate**: din exterior se ajunge la ele doar prin proxy (portul `8080`).
+
+Verificare cu `curl`:
+
+```bash
+curl -i -X PUT -H "Content-Type: application/json" \
+     -d '{"id":1,"name":"Ana","position":"Dev","department":"IT"}' http://localhost:5000/employee/   # 201
+curl -i -X PUT -H "Content-Type: application/json" \
+     -d '{"id":1,"name":"Ana","position":"Dev","department":"IT"}' http://localhost:5000/employee/   # 200
+curl -i -X POST -H "Content-Type: application/json" -d '{"name":"Ana B"}' "http://localhost:5000/employee/?id=1"
+curl -H "Accept: application/xml"  "http://localhost:5000/employee/?id=1"
+curl -i -H "Accept: text/plain"    "http://localhost:5000/employee/?id=1"                            # 406
+curl -H "If-Modified-Since: Sat, 29 Oct 2014 19:43:31 GMT" -H "From: nodename@hostdomain" \
+     http://localhost:5000/update/employees/                                                        # pull-request
+```
+
+### Procesare concurentă
+
+Kestrel servește fiecare cerere pe un fir din pool (un fir pe cerere). Controller-ele nu țin stare între cereri, iar starea partajată este thread-safe (`ConcurrentDictionary` în memorie, Cassandra în cealaltă variantă). Fiecare cerere scrie în `logs/<nume>.log` o linie `http_request ... thread=<id>`: la mai mulți clienți simultani apar multe id-uri diferite.
+
+### Limitări
+
+- **Cassandra nu are `OFFSET`.** Pentru `offset=o&limit=l` se citesc primele `o+l` rânduri și se sar primele `o`. La scara laboratorului este acceptabil, dar la offset-uri mari ar fi lent. Ordinea paginilor este cea a token-urilor cheii primare: stabilă între cereri, dar nu sortată după `id` (în varianta din memorie, lista e sortată după `id`).
+- **`/update/employees/`** folosește tabelul `employee_changes` cu un singur bucket (`all`), suficient la această scară.
+- Un mesaj `EmployeeChange` pe care nu-l primește niciun abonat ajunge în dead-letter după `MessageTtl` (5 min). Dacă bridge-ul este oprit mai mult, schimbările rămân în `logs/deadletter.log`.
+
 ## Teste
 
 Rulezi tot cu o singură comandă:
@@ -312,13 +393,14 @@ Rulezi tot cu o singură comandă:
 dotnet test
 ```
 
-Sunt trei proiecte de test:
+Sunt patru proiecte de test:
 
 | Proiect | Ce acoperă |
 |---------|------------|
 | `tests/unit/Pad.Common.Tests` | serializarea protobuf și validarea mesajelor |
+| `tests/unit/Pad.Warehouse.Tests` | regulile serviciului warehouse (id invalid, paginare, `PUT` idempotent, `POST` parțial) |
 | `tests/contract/Pad.Contract.Tests` | exemplele din contract rămân valide |
-| `tests/integration/Pad.Integration.Tests` | sistemul întreg, cu un broker gRPC adevărat |
+| `tests/integration/Pad.Integration.Tests` | sistemul întreg: un broker gRPC adevărat și un warehouse HTTP adevărat |
 
 **Testele de integrare** pornesc un broker real pe un port liber, îi conectează sender-ul adevărat (`Pad.Sender.BrokerClient`) și un receiver de test, apoi verifică:
 
@@ -330,6 +412,21 @@ Sunt trei proiecte de test:
 | `AcelasiMessageIdTrimisDeDouaOri_NuProduceDublura` | retrimiterea aceluiași `messageId` primește `ACK`, dar receiver-ul îl vede o singură dată |
 
 Fiecare test își are propriul port și propriul fișier WAL, într-un folder temporar șters la final, deci testele nu se influențează între ele.
+
+**Testele warehouse-ului** (`WarehouseFlowTests`) pornesc un warehouse real pe un port liber și îi trimit cereri HTTP:
+
+| Test | Ce demonstrează |
+|------|-----------------|
+| `Put_PrimaOaraDa201_ApoiAceeasiCerere200_FaraDublura` | `PUT` idempotent: `201`, apoi `200`, un singur angajat |
+| `Put_ScriereMaiVeche_NuSuprascrieCeaMaiNoua` | o schimbare ajunsă în altă ordine nu strică datele mai noi |
+| `Accept_Json_...`, `Accept_Xml_...`, `Accept_Nesuportat_Da406` | formatul îl alege clientul; un `Accept` necunoscut primește `406` |
+| `CereriInvalide_Dau400`, `Get_Inexistent_Da404`, `Put_ContentTypeNesuportat_Da415` | codurile de eroare din contract |
+| `List_FaraParametri_Da10_SiLimitPesteMaxim_EsteRedusLa100` | regulile de paginare |
+| `Post_DoarNumele_PastreazaPozitiaSiDepartamentul` | `POST` modifică doar câmpurile trimise |
+| `Put_50DeCereriInParalel_ToateSuntSalvate` | concurență: 50 de `PUT`-uri simultane, toate salvate |
+| `Since_AntetIfModifiedSince_...`, `Since_ExempluDinEnunt_...`, `Since_AntetInvalid_Da400` | pull-request cu antetul `If-Modified-Since` (inclusiv exemplul din enunț și antetul invalid) |
+
+Testele rulează pe repository-ul din memorie. Varianta Cassandra se verifică manual (Docker Compose, vezi mai sus): datele supraviețuiesc unui `docker compose restart warehouse-2`, iar nodurile `warehouse-1` și `warehouse-2` văd aceleași date.
 
 ## Decizii de arhitectură
 

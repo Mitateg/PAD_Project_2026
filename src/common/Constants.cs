@@ -18,7 +18,18 @@ public static class Constants
      {
         "Anunt",
         "Alerta",
+        EmployeeChangeType,
     };
+
+     /// <summary>
+     /// Tipul mesajelor prin care o schimbare de angajat ajunge in warehouse
+     /// (sender -> broker -> bridge receiver -> proxy -> warehouse).
+     /// Payload-ul este {"op":"upsert","employee":{...}}.
+     /// </summary>
+     public const string EmployeeChangeType = "EmployeeChange";
+
+     /// <summary>Portul HTTP al nodurilor warehouse (in containere). Se poate schimba cu PAD_PORT.</summary>
+     public const int WarehousePort = 5000;
 
      /// <summary>De cate ori incercam sa livram un mesaj inainte de dead-letter.</summary>
      public const int MaxDeliveryAttempts = 3;

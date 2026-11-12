@@ -30,6 +30,10 @@ public class ReceiverOptions
 
     public bool Deduplicate { get; set; } = true;
     public bool CrashBeforeAck { get; set; }
+    public bool Bridge { get; set; }
+
+    public string ProxyUrl { get; set; } =
+        Environment.GetEnvironmentVariable("PAD_PROXY_URL") ?? "http://localhost:8080";
 
     public static ReceiverOptions Parse(string[] args)
     {
@@ -72,6 +76,14 @@ public class ReceiverOptions
 
                 case "--crash-before-ack":
                     options.CrashBeforeAck = true;
+                    break;
+
+                case "--bridge":
+                    options.Bridge = true;
+                    break;
+
+                case "--proxy-url":
+                    options.ProxyUrl = RequireValue(args, ref i, "--proxy-url");
                     break;
 
                 default:

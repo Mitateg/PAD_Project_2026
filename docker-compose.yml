@@ -144,6 +144,42 @@ services:
       - interactiv
     volumes:
       - ./logs:/app/logs
+   
+  proxy:
+    build:
+      context: .
+      dockerfile: src/proxy/Dockerfile
+    image: pad-proxy
+    environment:
+      PAD_WAREHOUSE_NODES: http://warehouse-1:5000,http://warehouse-2:5000,http://warehouse-3:5000
+      PAD_REDIS: redis:6379
+    ports:
+      - "8080:8080"                  # singurul port publicat spre clienti
+    depends_on:
+      redis:
+        condition: service_healthy
+      warehouse-1:
+        condition: service_started
+      warehouse-2:
+        condition: service_started
+      warehouse-3:
+        condition: service_started
+
+  bridge:
+    build:
+      context: .
+      dockerfile: src/receivers/Dockerfile
+    image: pad-receiver
+    environment:
+      PAD_PROXY_URL: http://proxy:8080
+    command: ["--brokers", "broker1:4242,broker2:4243", "--name", "bridge", "--subscribe", "EmployeeChange", "--bridge"]
+    depends_on:
+      - broker1
+      - broker2
+      - proxy
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
 
 volumes:
   cassandra-data:

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- Client HTTP (Lab 3): consola prin care se cer datele din warehouse.
+	     Vorbeste DOAR cu proxy-ul, niciodata direct cu un nod warehouse - asta cere etapa 2.
+	     Afiseaza antetele X-Cache si X-Served-By, deci se vede ce face proxy-ul. -->
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>Pad.Client</RootNamespace>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\common\Pad.Common.csproj" />
+	</ItemGroup>
+
+</Project>

@@ -484,3 +484,7 @@ $RECYCLE.BIN/
 # PAD: artefacte de rulare (WAL-ul brokerului si logurile). Nu se comit.
 data/
 logs/
+
+# graphify: graful de cunostinte, local, doar pentru navigat prin proiect.
+# Se reconstruieste cu /graphify, deci nu are rost in git.
+graphify-out/

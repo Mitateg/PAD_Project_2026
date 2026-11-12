@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- Unealta de incarcare (Lab 3). Sta in tools/, nu in src/ (nu face parte din sistemul
+       livrat) si nu in tests/ (nu e proiect xunit, dotnet test nu il poate rula).
+       Trimite multe cereri simultane prin proxy
+	     si masoara latentele, cat s-a servit din cache si cum s-au impartit pe noduri.
+	     Cu ea se demonstreaza procesarea concurenta, caching-ul si load balancing-ul. -->
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>Pad.LoadTest</RootNamespace>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\src\common\Pad.Common.csproj" />
+	</ItemGroup>
+
+</Project>

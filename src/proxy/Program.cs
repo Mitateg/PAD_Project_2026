@@ -30,6 +30,9 @@ if (!string.IsNullOrWhiteSpace(redisUrl))
         options.AbortOnConnectFail = false;
         options.ConnectRetry = 1;
         options.ConnectTimeout = 2000;
+        options.AsyncTimeout = 500;
+        options.SyncTimeout = 500;
+        options.BacklogPolicy = BacklogPolicy.FailFast;
 
         redis = ConnectionMultiplexer.Connect(options);
         db = redis.GetDatabase();
@@ -199,11 +202,12 @@ app.Map("/{**path}", async (HttpContext ctx, IHttpClientFactory factory) =>
     var method = ctx.Request.Method;
     var isGet = HttpMethods.IsGet(method);
     var accept = ctx.Request.Headers.Accept.ToString();
+    var cacheable = isGet && !ctx.Request.Path.StartsWithSegments("/update");
 
     string key =
         $"GET|{ctx.Request.Path}|{ctx.Request.QueryString}|{accept}";
 
-    if (isGet && cache.TryGetValue(key, out var hit))
+    if (cacheable && cache.TryGetValue(key, out var hit))
     {
         if (hit.Expires > DateTime.UtcNow)
         {
@@ -224,7 +228,7 @@ app.Map("/{**path}", async (HttpContext ctx, IHttpClientFactory factory) =>
         cache.TryRemove(key, out _);
     }
 
-    if (isGet)
+    if (cacheable)
         Interlocked.Increment(ref cacheMisses);
 
     using var ms = new MemoryStream();
@@ -244,6 +248,10 @@ app.Map("/{**path}", async (HttpContext ctx, IHttpClientFactory factory) =>
 
         if (accept.Length > 0)
             req.Headers.TryAddWithoutValidation("Accept", accept);
+
+        foreach (var h in new[] { "If-Modified-Since", "From" })
+            if (ctx.Request.Headers.TryGetValue(h, out var hv))
+                req.Headers.TryAddWithoutValidation(h, hv.ToString());
 
         if (body.Length > 0)
         {
@@ -278,7 +286,7 @@ app.Map("/{**path}", async (HttpContext ctx, IHttpClientFactory factory) =>
             var contentType = resp.Content.Headers.ContentType?.ToString();
 
             // Cache doar pentru GET cu status 200
-            if (isGet && (int)resp.StatusCode == 200)
+            if (cacheable && (int)resp.StatusCode == 200)
             {
                 cache[key] = new CachedResponse(
                     respBody,

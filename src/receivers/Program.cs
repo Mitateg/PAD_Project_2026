@@ -48,6 +48,12 @@ Console.WriteLine("Se conecteaza la broker...");
 connection.Start();
 connection.WaitForFirstConnection();
 
+if (options.Bridge)
+{
+    Console.WriteLine("[bridge] ruleaza fara meniu (Ctrl+C pentru oprire)");
+    Thread.Sleep(Timeout.Infinite);
+}
+
 string[] publicTypes = Constants.KnownMessageTypes;
 
 while (true)

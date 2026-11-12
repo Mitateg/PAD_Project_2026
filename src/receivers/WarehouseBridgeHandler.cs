@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Pad.Common;
 using Pad.Common.Grpc;
 
@@ -50,15 +52,23 @@ public sealed class WarehouseBridgeHandler : IMessageHandler
         string employeeJson;
         try
         {
-            using var doc = JsonDocument.Parse(m.PayloadJson);
-            if (!doc.RootElement.TryGetProperty("employee", out var emp))
+            var root = JsonNode.Parse(m.PayloadJson);
+            if (root is not JsonObject obj || obj["employee"] is not JsonObject emp)
             {
                 Console.WriteLine("[bridge] payload fara 'employee', ignorat");
                 return true;
             }
-            employeeJson = emp.GetRawText();
+
+            // contractul: OccurredAt din mesaj -> employee.updatedAt (last-write-wins in warehouse)
+            if (DateTime.TryParse(m.OccurredAt, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var occurredAt))
+            {
+                emp["updatedAt"] = occurredAt.ToString("O");
+            }
+
+            employeeJson = emp.ToJsonString();
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             Console.WriteLine($"[bridge] payload invalid, ignorat: {ex.Message}");
             return true;

@@ -10,6 +10,10 @@ public sealed class WarehouseBridgeHandler : IMessageHandler
     private readonly HttpClient _http;
     private readonly string _proxyUrl;
 
+    // id-urile mesajelor deja duse la warehouse (deduplicare dupa messageId)
+    private readonly HashSet<string> _done = new();
+    private readonly object _lock = new();
+
     public WarehouseBridgeHandler(HttpClient http, string proxyUrl)
     {
         _http = http;
@@ -17,6 +21,30 @@ public sealed class WarehouseBridgeHandler : IMessageHandler
     }
 
     public async Task<bool> HandleAsync(BrokerMessage m, bool isPrivate)
+    {
+        lock (_lock)
+        {
+            if (_done.Contains(m.MessageId))
+            {
+                Console.WriteLine($"[bridge] duplicat ignorat ({m.MessageId})");
+                return true;
+            }
+        }
+
+        bool ack = await HandleCoreAsync(m);
+
+        // id-ul se noteaza abia dupa ce stim rezultatul: la un 5xx intoarcem false,
+        // iar reincercarea trebuie sa treaca din nou prin PUT, nu sa fie luata drept duplicat
+        if (ack)
+        {
+            lock (_lock)
+                _done.Add(m.MessageId);
+        }
+
+        return ack;
+    }
+
+    private async Task<bool> HandleCoreAsync(BrokerMessage m)
     {
         // payload stricat: nu se repara prin reincercare -> ACK
         string employeeJson;

@@ -43,7 +43,22 @@ public static class Constants
      /// <summary>Cat asteptam un ACK inainte sa consideram incercarea esuata.</summary>
      public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(5);
 
-     /// <summary>Valorile campului "status" din raspunsul broker-ului.</summary>
-     public const string StatusAck = "ACK";
+    /// <summary>Portul pe care asculta proxy-ul (singurul port publicat spre clienti).</summary>
+    public const int ProxyPort = 8080;
+
+    /// <summary>Timeout pentru o cerere proxy -> warehouse.</summary>
+    public static readonly TimeSpan ProxyRequestTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>Cat timp un nod esuat e evitat de load balancer.</summary>
+    public static readonly TimeSpan NodeFailureCooldown = TimeSpan.FromSeconds(10);
+
+    /// <summary>Cat timp traieste un raspuns GET in cache.</summary>
+    public static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
+
+    /// <summary>Dupa cat timp de inactivitate dispare un client din Redis.</summary>
+    public static readonly TimeSpan ClientRecordTtl = TimeSpan.FromMinutes(10);
+
+    /// <summary>Valorile campului "status" din raspunsul broker-ului.</summary>
+    public const string StatusAck = "ACK";
      public const string StatusNack = "NACK";
 }

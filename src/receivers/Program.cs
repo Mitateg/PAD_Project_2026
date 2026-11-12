@@ -33,8 +33,15 @@ BrokerConnection connection = null!;
 MessageProcessor? processor = null;
 connection = new BrokerConnection(options, log, assignedName =>
 {
+    if (options.Bridge)
+    {
+        // brokerul asteapta ACK maxim Constants.AckTimeout (5 s), deci timeout mai mic aici
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+        return new WarehouseBridgeHandler(http, options.ProxyUrl);
+    }
+
     processor = new MessageProcessor(assignedName, options.Deduplicate, log) { AfterMessageShown = PrintMenu };
-    return processor;
+    return new ConsoleMessageHandler(processor);
 });
 
 Console.WriteLine("Se conecteaza la broker...");

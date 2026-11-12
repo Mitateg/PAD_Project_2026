@@ -1,6 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using Pad.Common;
+using Pad.Common.Grpc;
+
+namespace Pad.Receiver;
 
 public sealed class WarehouseBridgeHandler : IMessageHandler
 {

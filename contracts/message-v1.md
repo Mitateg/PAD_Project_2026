@@ -1,5 +1,27 @@
 # Contract mesaj v1 (varianta cu meniu si canale private)
 
+> **Transportul descris aici nu mai este in vigoare.** Documentul a fost scris pentru Partea 1,
+> cand mesajele circulau ca JSON pe o linie, peste socketuri TCP. Din Partea 2 sistemul foloseste
+> **gRPC cu protobuf** (vezi [ADR-002](../docs/decisions/adr-002-grpc-si-protobuf.md)), iar
+> `src/common/Message.cs` si `LineReader.cs` au fost sterse din cod.
+>
+> Ce s-a schimbat si ce a ramas:
+>
+> | Aici scrie | In cod acum |
+> |---|---|
+> | JSON pe o singura linie | protobuf binar, incadrat de HTTP/2 |
+> | clasa `Pad.Common.Message` | `Pad.Common.Grpc.BrokerMessage`, generata din [`broker.proto`](../src/common/Protos/broker.proto) |
+> | mesajul `HELLO` | RPC-ul `RegisterSender` (sender) si stream-ul `Subscribe` (receiver) |
+> | comenzile `subscribe` / `list_receivers` | RPC-ul `GetReceivers` si `SubscriptionChange` din stream |
+> | `payload` ca obiect JSON | campul `payload_json`, un string |
+>
+> **Campurile si regulile de rutare de mai jos raman valabile**: `messageId`, `correlationId`,
+> `messageType`, tipurile publice fata de canalele private, ACK/NACK. S-a schimbat doar felul in
+> care mesajul este impachetat si trimis pe fir.
+>
+> Documentul se pastreaza ca inregistrare istorica si nu se rescrie, la fel ca ADR-001.
+> Contractul in vigoare pentru forma mesajelor este fisierul `.proto`.
+
 Orice mesaj care circula prin sistem este un obiect JSON **pe o singura linie**, terminat cu `\n`.
 Clasa C# corespunzatoare este `Pad.Common.Message` (src/common/Message.cs).
 

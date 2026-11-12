@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Pad.Common;
 using Pad.Common.Grpc;
+using Pad.Common.Models;
 
 namespace Pad.Sender;
 
@@ -29,6 +30,47 @@ public static class MessageFactory
             SchemaVersion = 1,
             OccurredAt = DateTime.UtcNow.ToString("o"),
             PayloadJson = JsonSerializer.Serialize(new { text }, Json.Options),
+        };
+    }
+
+    /// <summary>
+    /// Mesaj de schimbare a unui angajat (Lab 3), conform contracts/warehouse-v1.md:
+    ///   payloadJson = {"op":"upsert","employee":{...}}
+    ///
+    /// OccurredAt este momentul schimbarii. Bridge-ul il copiaza in employee.updatedAt inainte
+    /// de PUT, iar warehouse-ul il foloseste ca timp al scrierii: o schimbare mai veche nu mai
+    /// suprascrie una mai noua, chiar daca ajunge dupa ea (brokerul nu garanteaza ordinea).
+    /// </summary>
+    public static BrokerMessage EmployeeChange(Employee employee, string? correlationId = null)
+    {
+        var payload = new { op = "upsert", employee };
+
+        return new BrokerMessage
+        {
+            MessageId = Guid.NewGuid().ToString(),
+            CorrelationId = correlationId ?? Guid.NewGuid().ToString(),
+            MessageType = Constants.EmployeeChangeType,
+            SchemaVersion = 1,
+            OccurredAt = DateTime.UtcNow.ToString("o"),
+            PayloadJson = JsonSerializer.Serialize(payload, Json.Options),
+        };
+    }
+
+    /// <summary>Un angajat de proba, cu id si nume alese aleator (pentru demo si incarcare).</summary>
+    public static Employee SampleEmployee(Random random)
+    {
+        string[] prenume = { "Ion", "Ana", "Mihai", "Elena", "Radu", "Maria", "Vlad", "Irina" };
+        string[] nume = { "Popescu", "Ionescu", "Rusu", "Ciobanu", "Lungu", "Munteanu" };
+        string[] pozitii = { "Engineer", "Tester", "Analyst", "Designer", "Manager" };
+        string[] departamente = { "R&D", "QA", "Sales", "Support", "IT" };
+
+        return new Employee
+        {
+            Id = random.Next(1, 1000),
+            Name = $"{prenume[random.Next(prenume.Length)]} {nume[random.Next(nume.Length)]}",
+            Position = pozitii[random.Next(pozitii.Length)],
+            Department = departamente[random.Next(departamente.Length)],
+            // UpdatedAt il lasam gol: il pune bridge-ul din OccurredAt, sau warehouse-ul la primire.
         };
     }
 

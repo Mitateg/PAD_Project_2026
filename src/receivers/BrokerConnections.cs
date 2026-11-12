@@ -27,7 +27,7 @@ public class BrokerConnection
 
     private readonly ReceiverOptions _options;
     private readonly Logger _log;
-    private readonly Func<string, IMessageHandler> _createHandler;
+    private readonly Func<string, MessageProcessor> _createProcessor;
 
     private readonly HashSet<string> _subscriptions;
     private readonly object _lock = new();
@@ -39,7 +39,7 @@ public class BrokerConnection
     private readonly CancellationTokenSource _cts = new();
     private readonly ManualResetEventSlim _connectedOnce = new();
     private volatile BrokerCall? _call;
-    private IMessageHandler? _handler;
+    private MessageProcessor? _processor;
     private volatile bool _stopping;
     private int _addressIndex;     // brokerul curent din lista de adrese
     private int _failuresInARow;   // esecuri consecutive; se reseteaza la o conectare reusita
@@ -47,11 +47,11 @@ public class BrokerConnection
     /// <summary>Numele unic primit de la broker. Null pana la prima conectare.</summary>
     public string? AssignedName { get; private set; }
 
-    public BrokerConnection(ReceiverOptions options, Logger log, Func<string, IMessageHandler> createHandler)
+    public BrokerConnection(ReceiverOptions options, Logger log, Func<string, MessageProcessor> createProcessor)
     {
         _options = options;
         _log = log;
-        _createHandler = createHandler;
+        _createProcessor = createProcessor;
         _subscriptions = new HashSet<string>(options.Subscriptions);
     }
 
@@ -201,7 +201,7 @@ public class BrokerConnection
         AssignedName = call.ResponseStream.Current.Registered.AssignedName;
         _failuresInARow = 0;
         Console.Title = "receiver " + AssignedName;
-        IMessageHandler handler = _handler ??= _createHandler(AssignedName);
+        MessageProcessor processor = _processor ??= _createProcessor(AssignedName);
 
         _log.Info("connected", result: $"as {AssignedName}, subscribed to [{string.Join(",", PublicSubscriptions)}]");
         Console.WriteLine($"[conectat la broker] Numele tau este \"{AssignedName}\" (asa te alege sender-ul pentru un mesaj privat).");
@@ -210,76 +210,40 @@ public class BrokerConnection
         _connectedOnce.Set();
 
         // La reconectare, meniul a ramas mai sus pe ecran: il reafisam noi.
-        if (isReconnect && handler is ConsoleMessageHandler)
-            Console.WriteLine("[reconectat la broker]");
+        if (isReconnect)
+            processor.AfterMessageShown?.Invoke();
 
         while (await call.ResponseStream.MoveNext(token))
         {
             ServerEvent evt = call.ResponseStream.Current;
             if (evt.EventCase == ServerEvent.EventOneofCase.Message)
-                await HandleMessageAsync(call, handler, evt.Message);
+                await HandleMessageAsync(call, processor, evt.Message);
         }
         // Stream-ul s-a inchis (broker oprit): iesim, iar RunForeverAsync reincearca.
     }
 
-    private async Task HandleMessageAsync(
-    BrokerCall call,
-    IMessageHandler handler,
-    BrokerMessage message)
+    private async Task HandleMessageAsync(BrokerCall call, MessageProcessor processor, BrokerMessage message)
     {
-        if (string.IsNullOrEmpty(message.MessageId)
-            || string.IsNullOrEmpty(message.MessageType))
+        if (string.IsNullOrEmpty(message.MessageId) || string.IsNullOrEmpty(message.MessageType))
         {
-            _log.Warn("invalid_message", JsonFormatter.Default.Format(message));
+            _log.Warn("invalid_message", result: JsonFormatter.Default.Format(message));
             return;
         }
 
-        _log.Info("message_received",
-            message.CorrelationId,
-            message.MessageId,
-            message.MessageType);
-
-        bool shouldAck = await handler.HandleAsync(
-            message,
-            isPrivate: message.MessageType == AssignedName);
+        _log.Info("message_received", message.CorrelationId, message.MessageId, message.MessageType);
+        processor.Process(message, isPrivate: message.MessageType == AssignedName);
 
         if (_options.CrashBeforeAck)
         {
-            _log.Error("crash_before_ack",
-                message.CorrelationId,
-                message.MessageId,
-                message.MessageType,
-                "simulated crash");
-
+            // Scenariul critic: am procesat, dar "cadem" inainte sa confirmam.
+            _log.Error("crash_before_ack", message.CorrelationId, message.MessageId, message.MessageType, "simulated crash");
             Environment.Exit(1);
         }
 
-        var ack = new ReceiverEvent
-        {
-            Ack = new ReceiverAck
-            {
-                MessageId = message.MessageId,
-                Status = shouldAck
-                    ? Constants.StatusAck
-                    : Constants.StatusNack
-            }
-        };
-
+        var ack = new ReceiverEvent { Ack = new ReceiverAck { MessageId = message.MessageId, Status = Constants.StatusAck } };
         if (await TryWriteAsync(call, ack))
-        {
-            _log.Info(
-                shouldAck ? "ack_sent" : "nack_sent",
-                message.CorrelationId,
-                message.MessageId,
-                message.MessageType);
-        }
+            _log.Info("ack_sent", message.CorrelationId, message.MessageId, message.MessageType);
         else
-        {
-            _log.Warn("ack_failed",
-                message.CorrelationId,
-                message.MessageId,
-                message.MessageType,
-                "stream closed");
-        }
+            _log.Warn("ack_failed", message.CorrelationId, message.MessageId, message.MessageType, "stream closed");
     }
 }

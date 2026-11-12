@@ -430,13 +430,13 @@ Testele rulează pe repository-ul din memorie. Varianta Cassandra se verifică m
 
 ## Decizii de arhitectură
 
-Motivele din spatele alegerilor tehnice sunt în [`docs/adr/`](docs/adr/):
+Motivele din spatele alegerilor tehnice sunt în [`docs/decisions/`](docs/decisions/):
 
 | ADR | Decizie | Status |
 |-----|---------|--------|
-| [001](docs/adr/adr-001-tcp-si-framing.md) | Socket TCP brut, mesaje JSON pe linii | înlocuit de 002 |
-| [002](docs/adr/adr-002-grpc-si-protobuf.md) | gRPC peste HTTP/2, contract protobuf | acceptat |
-| [003](docs/adr/adr-003-load-balancing.md) | Failover pe client, cu listă ordonată de brokere | acceptat |
+| [001](docs/decisions/adr-001-tcp-si-framing.md) | Socket TCP brut, mesaje JSON pe linii | înlocuit de 002 |
+| [002](docs/decisions/adr-002-grpc-si-protobuf.md) | gRPC peste HTTP/2, contract protobuf | acceptat |
+| [003](docs/decisions/adr-003-load-balancing.md) | Failover pe client, cu listă ordonată de brokere | acceptat |
 
 ADR-001 descrie Partea 1 și se păstrează ca înregistrare istorică: arată de ce s-a ales atunci socketul brut. Nu se rescrie când codul se schimbă.
 

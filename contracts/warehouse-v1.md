@@ -26,7 +26,7 @@ In XML, elementele au numele proprietatilor (`<Employee><Id>1</Id><Name>...</Nam
 | `GET` | `/employees/?offset={o}&limit={l}` | o pagina | `200` (lista, eventual goala) | `400` parametri invalizi |
 | `PUT` | `/employee/` | creare sau inlocuire (upsert idempotent) | `201` creat / `200` exista deja | `400` corp invalid, `415` content type nesuportat |
 | `POST` | `/employee/?id={id}` | modificare partiala (doar campurile trimise) | `200` | `404`, `400` |
-| `GET` | `/update/employees/` + antetul `If-Modified-Since` | schimbarile de dupa un moment (pull-request) | `200` | `400` |
+| `GET` | `/update/employees/` + antetul `If-Modified-Since` | schimbarile de dupa un moment (pull-request) | `200`, `304` (fara schimbari, doar cu antet) | `400` |
 | `GET` | `/health` | `200` doar daca stocarea raspunde | `200` | `503` |
 
 - **Format:** clientul alege cu `Accept: application/json` sau `Accept: application/xml`. Alt `Accept` primeste `406`.
@@ -39,9 +39,12 @@ In XML, elementele au numele proprietatilor (`<Employee><Id>1</Id><Name>...</Nam
   `If-Modified-Since: Sat, 29 Oct 2014 19:43:31 GMT` (data HTTP; se accepta si ISO-8601). Data HTTP are rezolutie de o secunda,
   iar ziua saptamanii se ignora (exemplul din enunt are ziua gresita). Varianta alternativa, fara antet:
   `?since={ISO-8601}`; daca vin amandoua, castiga antetul. Un antet care nu e data da `400`, la fel lipsa ambelor.
+  Fara schimbari: cu antet raspunde `304 Not Modified` (fara corp); cu `?since=` raspunde `200` cu lista goala.
+  Se pastreaza doar ultimele 7 zile de schimbari; o data mai veche primeste doar ce s-a pastrat.
   Un `since` cu offset `+` se trimite URL-encoded (ex. `%2B02%3A00`); varianta `...Z` nu are nevoie.
 - **`From: nodename@hostdomain`** (optional, la orice cerere) identifica nodul care cere; warehouse-ul il scrie in log.
-- **Proxy:** trebuie sa trimita mai departe antetele `If-Modified-Since` si `From` (nu doar `Accept` si `Content-Type`).
+- **`X-Correlation-Id`** (optional): warehouse-ul il scrie in log si il returneaza in raspuns (curatat: litere, cifre, `.`, `_`, `-`, maximum 64).
+- **Proxy:** trebuie sa trimita mai departe antetele `If-Modified-Since`, `From` si `X-Correlation-Id` (nu doar `Accept` si `Content-Type`), si sa lase sa treaca `304` fara corp, necacheat ca `200`.
   Raspunsul la `/update/employees/` depinde de antet, deci nu se pune in cache sau cheia de cache include antetul.
 
 ## Ordinea schimbarilor (last-write-wins)

@@ -25,6 +25,20 @@ public class BadRequestFilter : IExceptionFilter
 public static class WarehouseExtensions
 {
     /// <summary>
+    /// Returneaza in raspuns X-Correlation-Id-ul din cerere (curatat). Folosita si de Program.cs, si de testele
+    /// de integrare, ca testul sa verifice exact codul real.
+    /// </summary>
+    public static IApplicationBuilder UseCorrelationIdEcho(this IApplicationBuilder app) =>
+        app.Use(async (context, next) =>
+        {
+            string? corr = CorrelationId.Clean(context.Request.Headers[CorrelationId.Header].FirstOrDefault());
+            if (corr is not null)
+                context.Response.Headers[CorrelationId.Header] = corr;
+
+            await next();
+        });
+
+    /// <summary>
     /// Configurarea MVC a warehouse-ului, folosita si de Program.cs, si de testele de integrare,
     /// ca 406 si 400 sa se comporte la fel in ambele.
     ///

@@ -88,24 +88,18 @@ services:
       - "5000"                                # vizibil doar in reteaua compose, NU pe calculatorul gazda
     volumes:
       - ./logs:/app/logs
-    ports:
-      - "5001:5000"
 
   warehouse-2:
     <<: *warehouse
     environment:
       <<: *warehouse-env
       PAD_WAREHOUSE_NAME: warehouse-2
-    ports:
-      - "5002:5000"
 
   warehouse-3:
     <<: *warehouse
     environment:
       <<: *warehouse-env
       PAD_WAREHOUSE_NAME: warehouse-3
-    ports:
-      - "5003:5000"
 
   sender:
     build:

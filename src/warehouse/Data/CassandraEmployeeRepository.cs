@@ -1,3 +1,4 @@
+using System.Globalization;
 using Cassandra;
 using Pad.Common.Models;
 using Pad.Warehouse.Models;
@@ -20,7 +21,7 @@ public class CassandraEmployeeRepository : IEmployeeRepository
 
     private readonly ISession _session;
     private readonly PreparedStatement _get;
-    private readonly PreparedStatement _exists;
+    private readonly PreparedStatement _claimId;
     private readonly PreparedStatement _insert;
     private readonly PreparedStatement _logChange;
     private readonly PreparedStatement _list;
@@ -32,15 +33,21 @@ public class CassandraEmployeeRepository : IEmployeeRepository
 
         // Instructiuni pregatite: se parseaza o singura data, iar valorile se leaga, nu se concateneaza in text.
         _get = session.Prepare($"SELECT {Columns} FROM pad.employees WHERE id = ?");
-        _exists = session.Prepare("SELECT id FROM pad.employees WHERE id = ?");
+        _claimId = session.Prepare("INSERT INTO pad.employee_ids (id) VALUES (?) IF NOT EXISTS");
         _insert = session.Prepare(
             "INSERT INTO pad.employees (id, name, position, department, updated_at) VALUES (?, ?, ?, ?, ?) USING TIMESTAMP ?");
         _logChange = session.Prepare(
-            "INSERT INTO pad.employee_changes (bucket, changed_at, employee_id) VALUES ('all', now(), ?)");
+            "INSERT INTO pad.employee_changes (bucket, changed_at, employee_id) VALUES (?, now(), ?)");
         _list = session.Prepare($"SELECT {Columns} FROM pad.employees LIMIT ?");
         _changedIds = session.Prepare(
-            "SELECT employee_id FROM pad.employee_changes WHERE bucket = 'all' AND changed_at > maxTimeuuid(?)");
+            "SELECT employee_id FROM pad.employee_changes WHERE bucket = ? AND changed_at > maxTimeuuid(?)");
     }
+
+    // Bucket-ul unei schimbari = ziua ei (UTC).
+    private static string BucketFor(DateTime utc) => utc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    private Task LogChangeAsync(int id) =>
+        _session.ExecuteAsync(_logChange.Bind(BucketFor(DateTime.UtcNow), id));
 
     private static Employee Map(Row row) => new()
     {
@@ -72,8 +79,10 @@ public class CassandraEmployeeRepository : IEmployeeRepository
         DateTime when = TimeUtil.AsUtc(occurredAt ?? DateTime.UtcNow);
 
         // INSERT este deja upsert in Cassandra, deci idempotenta vine "gratis".
-        // Verificarea de mai jos serveste doar ca sa deosebim 201 (nou) de 200 (exista deja).
-        bool created = (await _session.ExecuteAsync(_exists.Bind(employee.Id))).FirstOrDefault() is null;
+        // Ca sa deosebim 201 (nou) de 200 (exista deja) fara cursa, "revendicam" id-ul atomic: exact o cerere
+        // vede [applied] = true, chiar daca mai multe PUT-uri pentru acelasi id nou sosesc in acelasi timp.
+        RowSet claim = await _session.ExecuteAsync(_claimId.Bind(employee.Id));
+        bool created = claim.First().GetValue<bool>("[applied]");
 
         await _session.ExecuteAsync(_insert.Bind(
             employee.Id,
@@ -83,7 +92,7 @@ public class CassandraEmployeeRepository : IEmployeeRepository
             new DateTimeOffset(when),
             TimeUtil.ToMicros(when)));
 
-        await _session.ExecuteAsync(_logChange.Bind(employee.Id));
+        await LogChangeAsync(employee.Id);
 
         // Returnam ce este de fapt stocat: daca scrierea a fost mai veche decat cea existenta, ramane cea noua.
         Employee stored = (await GetAsync(employee.Id))!;
@@ -111,14 +120,27 @@ public class CassandraEmployeeRepository : IEmployeeRepository
         string cql = $"UPDATE pad.employees USING TIMESTAMP ? SET {string.Join(", ", assignments)} WHERE id = ?";
         await _session.ExecuteAsync(new SimpleStatement(cql, values.ToArray()));
 
-        await _session.ExecuteAsync(_logChange.Bind(id));
+        await LogChangeAsync(id);
         return await GetAsync(id);
     }
 
     public async Task<IReadOnlyList<Employee>> ChangedSinceAsync(DateTimeOffset since)
     {
-        RowSet rows = await _session.ExecuteAsync(_changedIds.Bind(since));
-        List<int> ids = rows.Select(r => r.GetValue<int>("employee_id")).Distinct().ToList();
+        // Citim bucket-urile (zilele) de la ziua lui "since" pana azi. Incepem cu o zi mai devreme, ca o diferenta
+        // mica intre ceasuri sa nu piarda o schimbare de la miezul noptii, si nu mergem mai in urma decat retentia:
+        // altfel o data veche (ex. 2014 din enunt) ar insemna mii de interogari pentru bucket-uri deja sterse.
+        DateTime today = DateTime.UtcNow.Date;
+        DateTime earliest = today.AddDays(-CassandraSession.ChangeRetentionDays);
+        DateTime first = since.UtcDateTime.Date.AddDays(-1);
+        if (first < earliest) first = earliest;
+
+        var ids = new HashSet<int>();
+        for (DateTime day = first; day <= today; day = day.AddDays(1))
+        {
+            RowSet rows = await _session.ExecuteAsync(_changedIds.Bind(BucketFor(day), since));
+            foreach (Row row in rows)
+                ids.Add(row.GetValue<int>("employee_id"));
+        }
 
         var result = new List<Employee>();
         foreach (int id in ids)

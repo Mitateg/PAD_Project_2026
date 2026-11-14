@@ -328,11 +328,11 @@ Contractul complet este în [`contracts/warehouse-v1.md`](contracts/warehouse-v1
 | `GET` | `/employees/?offset=0&limit=10` | O pagină de angajați | `200` (lista poate fi goală), `400` |
 | `PUT` | `/employee/` | Creare sau înlocuire (idempotent) | `201` prima dată, `200` după, `400`, `415` |
 | `POST` | `/employee/?id=1` | Modificare parțială: doar câmpurile trimise | `200`, `404`, `400` |
-| `GET` | `/update/employees/` cu antetul `If-Modified-Since: Sat, 29 Oct 2014 19:43:31 GMT` | Ce s-a schimbat după acel moment (pull-request, ca în enunț) | `200`, `400` |
+| `GET` | `/update/employees/` cu antetul `If-Modified-Since: Sat, 29 Oct 2014 19:43:31 GMT` | Ce s-a schimbat după acel moment (pull-request, ca în enunț) | `200`, `304`, `400` |
 | `GET` | `/health` | `200` doar dacă stocarea chiar răspunde | `200`, `503` |
 
 - **JSON sau XML:** clientul alege prin `Accept: application/json` sau `Accept: application/xml`. Un `Accept` pe care nu-l putem produce (ex. `text/plain`) primește `406`. Corpul unui `PUT` poate fi la fel JSON sau XML (după `Content-Type`).
-- **Pull-request:** momentul se trimite în antetul `If-Modified-Since` (dată HTTP, ca în enunț; se acceptă și ISO-8601). Ca variantă, merge și `?since=2026-11-09T10:00:00Z`; dacă vin amândouă, câștigă antetul. Un antet care nu e dată dă `400`; fără niciunul dintre ele, tot `400`. Data HTTP are rezoluție de o secundă, iar ziua săptămânii se ignoră (exemplul din enunț, „Sat, 29 Oct 2014", are ziua greșită: a fost miercuri). Antetul `From` (ex. `nodename@hostdomain`) apare în log, ca să se vadă cine a cerut.
+- **Pull-request:** momentul se trimite în antetul `If-Modified-Since` (dată HTTP, ca în enunț; se acceptă și ISO-8601). Ca variantă, merge și `?since=2026-11-09T10:00:00Z`; dacă vin amândouă, câștigă antetul. Dacă nu s-a schimbat nimic, varianta cu antet răspunde `304 Not Modified`, fără corp (varianta `?since=` răspunde `200` cu listă goală). Un antet care nu e dată dă `400`; fără niciunul dintre ele, tot `400`. Data HTTP are rezoluție de o secundă, iar ziua săptămânii se ignoră (exemplul din enunț, „Sat, 29 Oct 2014", are ziua greșită: a fost miercuri). Antetul `From` (ex. `nodename@hostdomain`) apare în log, ca să se vadă cine a cerut.
 - **Paginare:** `limit` implicit `10`, maxim `100`. Un `limit` mai mare **nu dă eroare, este redus la 100**. `offset` negativ sau `limit` sub 1 dau `400`.
 - **`PUT` este idempotent:** același `PUT` de două ori dă `201` și apoi `200`, fără eroare și fără dublură. Contează, pentru că proxy-ul reîncearcă pe alt nod când unul cade.
 - **`POST` nu șterge ce nu trimiți:** `{"name":"X"}` schimbă doar numele.
@@ -382,7 +382,10 @@ Kestrel servește fiecare cerere pe un fir din pool (un fir pe cerere). Controll
 ### Limitări
 
 - **Cassandra nu are `OFFSET`.** Pentru `offset=o&limit=l` se citesc primele `o+l` rânduri și se sar primele `o`. La scara laboratorului este acceptabil, dar la offset-uri mari ar fi lent. Ordinea paginilor este cea a token-urilor cheii primare: stabilă între cereri, dar nu sortată după `id` (în varianta din memorie, lista e sortată după `id`).
-- **`/update/employees/`** folosește tabelul `employee_changes` cu un singur bucket (`all`), suficient la această scară.
+- **`/update/employees/`** folosește tabelul `employee_changes`, partiționat pe zi (`bucket = 2026-11-14`) și cu TTL de 7 zile (`CassandraSession.ChangeRetentionDays`): tabelul are mărime mărginită și nu există o partiție unică, tot mai mare. Un pull-request cu o dată mai veche de 7 zile primește doar ce s-a păstrat (cererea cu data din enunț, 2014, nu face mii de interogări: citește cel mult ultimele 8 zile).
+- **`201` vs `200` la `PUT`** se decide atomic: tabelul mic `employee_ids` primește `INSERT ... IF NOT EXISTS`, iar rezultatul `[applied]` spune dacă id-ul e nou. Așa, mai multe `PUT`-uri simultane pentru același id nou dau exact un `201`, chiar și pe noduri diferite. (`IF NOT EXISTS` nu se poate pune direct pe `employees`: Cassandra nu acceptă `USING TIMESTAMP` pe instrucțiuni condiționale.)
+- **Schimbarea schemei.** `CREATE TABLE IF NOT EXISTS` nu modifică tabele existente: la o bază Cassandra mai veche se rulează o dată `docker compose down -v` (șterge volumul), ca să se creeze schema nouă.
+- **`X-Correlation-Id`** (de la proxy/client) se scrie în câmpul `corr=` al logului și se returnează în răspuns, după ce e curățat (doar litere, cifre, `.`, `_`, `-`, maximum 64 de caractere).
 - Un mesaj `EmployeeChange` pe care nu-l primește niciun abonat ajunge în dead-letter după `MessageTtl` (5 min). Dacă bridge-ul este oprit mai mult, schimbările rămân în `logs/deadletter.log`.
 
 ## Teste

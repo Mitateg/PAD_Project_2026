@@ -277,6 +277,60 @@ public class WarehouseFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Since_FaraSchimbari_CuAntet_Da304FaraCorp()
+    {
+        await Put(Emp(1));
+
+        // Un moment in viitor: nimic nu s-a schimbat dupa el.
+        var response = await GetIfModifiedSince(
+            DateTime.UtcNow.AddDays(1).ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.Equal(HttpStatusCode.NotModified, response.StatusCode);
+        Assert.Equal("", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Since_FaraSchimbari_CuParametrulSince_Da200CuListaGoala()
+    {
+        await Put(Emp(1));
+        var since = DateTimeOffset.UtcNow.AddDays(1);
+
+        var response = await _http.GetAsync("/update/employees/?since=" + Uri.EscapeDataString(since.ToString("O")));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var changed = await response.Content.ReadFromJsonAsync<List<Employee>>();
+        Assert.Empty(changed!);
+    }
+
+    [Fact]
+    public async Task Put_MaiMultePutPentruAcelasiIdNou_ExactUnulPrimeste201()
+    {
+        var responses = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => Put(Emp(500))));
+
+        Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.Created));
+        Assert.Equal(19, responses.Count(r => r.StatusCode == HttpStatusCode.OK));
+    }
+
+    [Fact]
+    public async Task CorrelationId_EsteReturnatInRaspuns_DupaCuratare()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, "/employees/");
+        request.Headers.TryAddWithoutValidation("X-Correlation-Id", "abc-123 <x>");
+
+        var response = await _http.SendAsync(request);
+
+        Assert.Equal("abc-123x", response.Headers.GetValues("X-Correlation-Id").Single());
+    }
+
+    [Fact]
+    public async Task FaraCorrelationId_RaspunsulNuAreAntetul()
+    {
+        var response = await _http.GetAsync("/employees/");
+
+        Assert.False(response.Headers.Contains("X-Correlation-Id"));
+    }
+
+    [Fact]
     public async Task Since_AntetInvalid_Da400()
     {
         var response = await GetIfModifiedSince("nu e o data");

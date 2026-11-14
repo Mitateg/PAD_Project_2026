@@ -49,13 +49,18 @@ var app = builder.Build();
 // /health este apelat des de proxy si de Docker, deci nu-l scriem.
 app.Use(async (context, next) =>
 {
+    // X-Correlation-Id (de la proxy/client): il scriem in log si il trimitem inapoi in raspuns.
+    string? corr = CorrelationId.Clean(context.Request.Headers[CorrelationId.Header].FirstOrDefault());
+    if (corr is not null)
+        context.Response.Headers[CorrelationId.Header] = corr;
+
     if (context.Request.Path != "/health")
     {
         // Antetul From (ex. nodename@hostdomain) spune cine a trimis cererea, ca in schema din enunt.
         string from = context.Request.Headers["From"].ToString();
         string caller = string.IsNullOrEmpty(from) ? "" : $" from={from}";
 
-        log.Info("http_request",
+        log.Info("http_request", corr: corr,
             result: $"{context.Request.Method} {context.Request.Path}{context.Request.QueryString} thread={Environment.CurrentManagedThreadId}{caller}");
     }
     await next();

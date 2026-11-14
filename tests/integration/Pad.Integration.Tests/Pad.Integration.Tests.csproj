@@ -25,6 +25,7 @@
 		<ProjectReference Include="..\..\..\src\common\Pad.Common.csproj" />
 		<ProjectReference Include="..\..\..\src\broker\Pad.Broker.csproj" />
 		<ProjectReference Include="..\..\..\src\sender\Pad.Sender.csproj" />
+		<ProjectReference Include="..\..\..\src\warehouse\Pad.Warehouse.csproj" />
 	</ItemGroup>
 
 </Project>

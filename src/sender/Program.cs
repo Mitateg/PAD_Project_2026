@@ -1,5 +1,6 @@
 using Pad.Common;
 using Pad.Common.Grpc;
+using Pad.Common.Models;
 using Pad.Sender;
 
 // Punctul de intrare al sender-ului: un meniu simplu in consola.
@@ -27,6 +28,9 @@ using var broker = new BrokerClient(options.BrokerAddresses, options.Name,
 broker.ConnectWithWait();
 Console.Title = "sender " + broker.Name;
 
+// Folosit de optiunile 3 si 5 ca sa genereze angajati de proba.
+Random employeeRandom = new();
+
 while (true)
 {
     Console.WriteLine();
@@ -35,6 +39,9 @@ while (true)
         : $"=== SENDER \"{broker.Name}\" ===");
     Console.WriteLine("  1. Trimite mesaje automate (cate unul pentru fiecare destinatie)");
     Console.WriteLine("  2. Scriu eu mesajul");
+    Console.WriteLine("  3. Trimite un angajat generat automat        (EmployeeChange)");
+    Console.WriteLine("  4. Scriu eu datele angajatului               (EmployeeChange)");
+    Console.WriteLine("  5. Trimite N angajati deodata                (EmployeeChange)");
     Console.WriteLine("  0. Iesire");
     Console.Write("alegere> ");
 
@@ -47,8 +54,14 @@ while (true)
         SendAutomatic();
     else if (choice == "2")
         SendManual();
+    else if (choice == "3")
+        SendRandomEmployee();
+    else if (choice == "4")
+        SendTypedEmployee();
+    else if (choice == "5")
+        SendManyEmployees();
     else
-        Console.WriteLine("Alege 1, 2 sau 0.");
+        Console.WriteLine("Alege 1, 2, 3, 4, 5 sau 0.");
 }
 
 return 0;
@@ -115,4 +128,75 @@ void SendAndShow(BrokerMessage message)
 
     bool delivered = broker.SendWithRetry(message);
     Console.WriteLine(delivered ? "  -> ACK primit, mesajul este la broker." : "  -> NU s-a putut livra (vezi logul).");
+}
+
+// ---------------------------------------------------------------------------
+// Lab 3: mesaje EmployeeChange. Pleaca prin broker ca orice alt mesaj public,
+// iar bridge-ul receiver le duce mai departe la warehouse printr-un PUT.
+
+
+// Un angajat generat automat.
+void SendRandomEmployee()
+{
+    Employee employee = MessageFactory.SampleEmployee(employeeRandom);
+    Console.WriteLine($"  angajat: #{employee.Id} {employee.Name}, {employee.Position}, {employee.Department}");
+    SendAndShow(MessageFactory.EmployeeChange(employee));
+}
+
+// Utilizatorul scrie datele angajatului.
+void SendTypedEmployee()
+{
+    Console.Write("id (numar)> ");
+    if (!int.TryParse(Console.ReadLine()?.Trim(), out int id) || id <= 0)
+    {
+        Console.WriteLine("Id invalid (trebuie numar mai mare ca 0), nu trimit nimic.");
+        return;
+    }
+
+    Console.Write("nume> ");
+    string? name = Console.ReadLine()?.Trim();
+    if (string.IsNullOrEmpty(name))
+    {
+        Console.WriteLine("Numele este obligatoriu, nu trimit nimic.");
+        return;
+    }
+
+    Console.Write("pozitie> ");
+    string position = Console.ReadLine()?.Trim() ?? "";
+    Console.Write("departament> ");
+    string department = Console.ReadLine()?.Trim() ?? "";
+
+    SendAndShow(MessageFactory.EmployeeChange(new Employee
+    {
+        Id = id,
+        Name = name,
+        Position = position,
+        Department = department,
+    }));
+}
+
+// N angajati deodata, toti cu acelasi correlationId: in loguri se vede ca sunt o singura actiune.
+void SendManyEmployees()
+{
+    Console.Write("cati angajati> ");
+    if (!int.TryParse(Console.ReadLine()?.Trim(), out int count) || count < 1 || count > 500)
+    {
+        Console.WriteLine("Numar invalid (1-500), nu trimit nimic.");
+        return;
+    }
+
+    string correlationId = Guid.NewGuid().ToString();
+    int delivered = 0;
+
+    for (int i = 0; i < count; i++)
+    {
+        Employee employee = MessageFactory.SampleEmployee(employeeRandom);
+        if (broker.SendWithRetry(MessageFactory.EmployeeChange(employee, correlationId)))
+            delivered++;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"Trimise {delivered} din {count}. Toate au correlationId = {correlationId}");
+    if (delivered < count)
+        Console.WriteLine("  -> cele nelivrate sunt in logul sender-ului (message_failed).");
 }

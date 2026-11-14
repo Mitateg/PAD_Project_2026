@@ -10,8 +10,28 @@
 #   docker compose run --rm receiver --name ion --subscribe Anunt,Alerta
 #   docker compose logs -f broker1 broker2          # loguri brokeri
 #   docker compose down                             # opreste tot
+#
+# Warehouse: Cassandra + 3 noduri warehouse care vad aceleasi date.
+# Porturile warehouse-urilor NU sunt publicate: doar proxy-ul va fi accesibil din exterior (8080).
+# Pentru a testa un nod direct, vezi comanda cu "run -p" de mai jos.
+#   docker compose up -d --build cassandra warehouse-1 warehouse-2 warehouse-3
+#   docker compose logs -f warehouse-1              # id-urile de fir apar in fiecare linie http_request
+#   docker compose run --rm -p 5000:5000 warehouse-1   # un nod expus temporar pe localhost:5000
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: pad-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
   broker1:
     build:
       context: .
@@ -35,6 +55,57 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data/broker2:/app/data
+
+  # ---- Lab 3: warehouse ----
+
+  cassandra:
+    image: cassandra:4.1
+    environment:
+      # Heap mic, ca sa porneasca si pe un laptop. Ambele valori trebuie setate impreuna.
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra-data:/var/lib/cassandra     # datele raman si dupa `docker compose down`
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s                       # Cassandra chiar are nevoie de atat
+
+  warehouse-1: &warehouse
+    build:
+      context: .
+      dockerfile: src/warehouse/Dockerfile
+    image: pad-warehouse                      # aceeasi imagine pentru toate trei nodurile
+    environment: &warehouse-env
+      PAD_CASSANDRA_HOST: cassandra
+      PAD_WAREHOUSE_NAME: warehouse-1
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    expose:
+      - "5000"                                # vizibil doar in reteaua compose, NU pe calculatorul gazda
+    volumes:
+      - ./logs:/app/logs
+    ports:
+      - "5001:5000"
+
+  warehouse-2:
+    <<: *warehouse
+    environment:
+      <<: *warehouse-env
+      PAD_WAREHOUSE_NAME: warehouse-2
+    ports:
+      - "5002:5000"
+
+  warehouse-3:
+    <<: *warehouse
+    environment:
+      <<: *warehouse-env
+      PAD_WAREHOUSE_NAME: warehouse-3
+    ports:
+      - "5003:5000"
 
   sender:
     build:
@@ -73,3 +144,43 @@ services:
       - interactiv
     volumes:
       - ./logs:/app/logs
+   
+  proxy:
+    build:
+      context: .
+      dockerfile: src/proxy/Dockerfile
+    image: pad-proxy
+    environment:
+      PAD_WAREHOUSE_NODES: http://warehouse-1:5000,http://warehouse-2:5000,http://warehouse-3:5000
+      PAD_REDIS: redis:6379
+    ports:
+      - "8080:8080"                  # singurul port publicat spre clienti
+    depends_on:
+      redis:
+        condition: service_healthy
+      warehouse-1:
+        condition: service_started
+      warehouse-2:
+        condition: service_started
+      warehouse-3:
+        condition: service_started
+
+  bridge:
+    build:
+      context: .
+      dockerfile: src/receivers/Dockerfile
+    image: pad-receiver
+    environment:
+      PAD_PROXY_URL: http://proxy:8080
+    command: ["--brokers", "broker1:4242,broker2:4243", "--name", "bridge", "--subscribe", "EmployeeChange", "--bridge"]
+    depends_on:
+      - broker1
+      - broker2
+      - proxy
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+
+volumes:
+  cassandra-data:
+  redis-data:

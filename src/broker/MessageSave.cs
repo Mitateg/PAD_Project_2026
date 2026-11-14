@@ -119,7 +119,7 @@ public class MessageSave : IDisposable
 
      private void Append(string line, bool fsync)
      {
-          _writer!.WriteLine(line + "\n");
+          _writer!.WriteLine(line);
           _writer!.Flush();
           if (fsync)
                _fileStream!.Flush(true);

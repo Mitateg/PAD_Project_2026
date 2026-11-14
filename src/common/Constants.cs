@@ -18,7 +18,18 @@ public static class Constants
      {
         "Anunt",
         "Alerta",
+        EmployeeChangeType,
     };
+
+     /// <summary>
+     /// Tipul mesajelor prin care o schimbare de angajat ajunge in warehouse
+     /// (sender -> broker -> bridge receiver -> proxy -> warehouse).
+     /// Payload-ul este {"op":"upsert","employee":{...}}.
+     /// </summary>
+     public const string EmployeeChangeType = "EmployeeChange";
+
+     /// <summary>Portul HTTP al nodurilor warehouse (in containere). Se poate schimba cu PAD_PORT.</summary>
+     public const int WarehousePort = 5000;
 
      /// <summary>De cate ori incercam sa livram un mesaj inainte de dead-letter.</summary>
      public const int MaxDeliveryAttempts = 3;
@@ -32,7 +43,22 @@ public static class Constants
      /// <summary>Cat asteptam un ACK inainte sa consideram incercarea esuata.</summary>
      public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(5);
 
-     /// <summary>Valorile campului "status" din raspunsul broker-ului.</summary>
-     public const string StatusAck = "ACK";
+    /// <summary>Portul pe care asculta proxy-ul (singurul port publicat spre clienti).</summary>
+    public const int ProxyPort = 8080;
+
+    /// <summary>Timeout pentru o cerere proxy -> warehouse.</summary>
+    public static readonly TimeSpan ProxyRequestTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>Cat timp un nod esuat e evitat de load balancer.</summary>
+    public static readonly TimeSpan NodeFailureCooldown = TimeSpan.FromSeconds(10);
+
+    /// <summary>Cat timp traieste un raspuns GET in cache.</summary>
+    public static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
+
+    /// <summary>Dupa cat timp de inactivitate dispare un client din Redis.</summary>
+    public static readonly TimeSpan ClientRecordTtl = TimeSpan.FromMinutes(10);
+
+    /// <summary>Valorile campului "status" din raspunsul broker-ului.</summary>
+    public const string StatusAck = "ACK";
      public const string StatusNack = "NACK";
 }

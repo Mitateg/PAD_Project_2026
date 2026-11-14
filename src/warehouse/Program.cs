@@ -44,18 +44,18 @@ builder.Services.AddSingleton<EmployeeService>();
 
 var app = builder.Build();
 
+// X-Correlation-Id: returnat in raspuns (curatat). Il scriem si in log, mai jos.
+app.UseCorrelationIdEcho();
+
 // Dovada pentru "un fir pe cerere": cate o linie in log pentru fiecare cerere, cu id-ul firului.
 // La o rulare cu mai multi clienti simultan apar multe id-uri diferite.
 // /health este apelat des de proxy si de Docker, deci nu-l scriem.
 app.Use(async (context, next) =>
 {
-    // X-Correlation-Id (de la proxy/client): il scriem in log si il trimitem inapoi in raspuns.
-    string? corr = CorrelationId.Clean(context.Request.Headers[CorrelationId.Header].FirstOrDefault());
-    if (corr is not null)
-        context.Response.Headers[CorrelationId.Header] = corr;
-
     if (context.Request.Path != "/health")
     {
+        string? corr = CorrelationId.Clean(context.Request.Headers[CorrelationId.Header].FirstOrDefault());
+
         // Antetul From (ex. nodename@hostdomain) spune cine a trimis cererea, ca in schema din enunt.
         string from = context.Request.Headers["From"].ToString();
         string caller = string.IsNullOrEmpty(from) ? "" : $" from={from}";

@@ -3,7 +3,7 @@ using System.Diagnostics;
 
 // Unealta de incarcare pentru Lab 3.
 //
-//   dotnet run --project src/loadtest -- --clients 50 --requests 20 --path "/employee/?id=1"
+//   dotnet run --project tools/loadtest -- --clients 50 --requests 20 --path "/employee/?id=1"
 //
 // Porneste --clients sarcini in paralel, fiecare trimite --requests cereri GET prin proxy,
 // si masoara: cat a durat, cate pe secunda, latentele, cat s-a servit din cache (X-Cache)
@@ -44,7 +44,7 @@ catch (Exception ex) when (ex is ArgumentException || ex is IndexOutOfRangeExcep
 {
     Console.WriteLine($"Argumente gresite: {ex.Message}");
     Console.WriteLine();
-    Console.WriteLine("Folosire: dotnet run --project src/loadtest -- [--url http://localhost:8080]");
+    Console.WriteLine("Folosire: dotnet run --project tools/loadtest -- [--url http://localhost:8080]");
     Console.WriteLine("            [--clients 50] [--requests 20] [--path \"/employee/?id=1\"] [--accept json|xml]");
     return 2;
 }

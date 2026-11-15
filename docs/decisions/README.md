@@ -11,5 +11,6 @@ nu doar unde am ajuns.
 | [001](adr-001-tcp-si-framing.md) | Socket TCP brut, mesaje JSON delimitate prin newline | inlocuit de 002 |
 | [002](adr-002-grpc-si-protobuf.md) | gRPC peste HTTP/2, contract protobuf | acceptat |
 | [003](adr-003-load-balancing.md) | Failover pe client, cu lista ordonata de brokere | acceptat |
+| [004](adr-004-proxy-si-caching.md) | Proxy scris de mana, cu cache pe raspunsurile `GET` | acceptat |
 
-ADR-001 descrie Partea 1 a laboratorului, 002 si 003 descriu Partea 2.
+ADR-001 descrie Partea 1 a laboratorului, 002 si 003 descriu Partea 2, iar 004 descrie Lab 3.

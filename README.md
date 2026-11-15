@@ -386,7 +386,132 @@ Kestrel servește fiecare cerere pe un fir din pool (un fir pe cerere). Controll
 - **`201` vs `200` la `PUT`** se decide atomic: tabelul mic `employee_ids` primește `INSERT ... IF NOT EXISTS`, iar rezultatul `[applied]` spune dacă id-ul e nou. Așa, mai multe `PUT`-uri simultane pentru același id nou dau exact un `201`, chiar și pe noduri diferite. (`IF NOT EXISTS` nu se poate pune direct pe `employees`: Cassandra nu acceptă `USING TIMESTAMP` pe instrucțiuni condiționale.)
 - **Schimbarea schemei.** `CREATE TABLE IF NOT EXISTS` nu modifică tabele existente: la o bază Cassandra mai veche se rulează o dată `docker compose down -v` (șterge volumul), ca să se creeze schema nouă.
 - **`X-Correlation-Id`** (de la proxy/client) se scrie în câmpul `corr=` al logului și se returnează în răspuns, după ce e curățat (doar litere, cifre, `.`, `_`, `-`, maximum 64 de caractere).
-- Un mesaj `EmployeeChange` pe care nu-l primește niciun abonat ajunge în dead-letter după `MessageTtl` (5 min). Dacă bridge-ul este oprit mai mult, schimbările rămân în `logs/deadletter.log`.
+- **Bridge-ul nu există încă.** Varianta în care sender-ul publică prin broker, iar un receiver „bridge” duce schimbarea mai departe la warehouse, a fost scoasă din `docker-compose.yml`: receiver-ul nu acceptă argumentul `--bridge`, pentru că implementarea a fost revertită. Calea folosită este cea directă, prin client și proxy, care acoperă complet cerința. Un mesaj `EmployeeChange` trimis acum din sender rămâne în broker și ajunge în dead-letter după `MessageTtl` (5 min), pentru că nu-l consumă nimeni.
+
+## Proxy (Lab 3, etapa 2)
+
+Proxy-ul (`src/proxy`) este **singura poartă de intrare** spre nodurile warehouse: cerința etapei 2 este ca „comunicarea acestuia cu orice client să fie prin aplicația proxy". În `docker-compose.yml` doar portul `8080` al proxy-ului este publicat; warehouse-urile, Cassandra și Redis folosesc `expose`, deci sunt vizibile numai în rețeaua compose.
+
+Motivele din spatele alegerilor (proxy scris de mână în loc de YARP/nginx, `Accept` în cheia de cache, invalidare la scriere în loc de TTL scurt) sunt în [ADR-004](docs/decisions/adr-004-proxy-si-caching.md). Măsurătorile sunt în [`docs/evidence/lab3-loadtest.md`](docs/evidence/lab3-loadtest.md).
+
+### Ce face cu o cerere
+
+1. **Alege un nod** prin round-robin, sărind peste nodurile aflate în cooldown.
+2. **Reîncearcă pe alt nod** dacă nodul ales răspunde `5xx` sau nu răspunde deloc, în cadrul *aceleiași* cereri HTTP. Clientul nu vede eroarea. Nodul care a eșuat este ocolit timp de `NodeFailureCooldown` (10 s).
+3. **Răspunde `502`** doar când toate nodurile au fost încercate și au eșuat.
+4. **Pune răspunsul în cache** dacă e un `GET` cu status `200`, și **îl șterge** după un `PUT`/`POST` reușit.
+
+Antetele `Accept`, `If-Modified-Since` și `From` sunt transmise către warehouse, deci formatul și pull-request-ul funcționează identic prin proxy și direct pe un nod.
+
+### Cache
+
+| Aspect | Cum e |
+|---|---|
+| Cheia | `GET` + cale + query + **antetul `Accept`** |
+| TTL | `Constants.CacheTtl` = **30 s**, ca plasă de siguranță; mecanismul principal e invalidarea la scriere |
+| Ce se cachează | numai `GET` cu status `200`; erorile (`404`, `400`, `406`) nu |
+| Ce nu se cachează | `/update/employees/` — pull-request-ul e corect doar în momentul în care a fost dat |
+| Invalidare | după `PUT`/`POST` reușit, se șterg intrările angajaților |
+
+`Accept` face parte din cheie pentru că warehouse-ul alege formatul după el: fără asta, un client care cere XML ar primi JSON-ul pus în cache de altul. Consecința practică, utilă la demonstrație: **același angajat cerut ca JSON și ca XML sunt două intrări diferite**, deci prima cerere în formatul nou e întotdeauna `MISS`.
+
+### Antetele de răspuns
+
+Fără ele nu s-ar vedea nimic din ce face proxy-ul:
+
+| Antet | Valori | Ce arată |
+|---|---|---|
+| `X-Cache` | `HIT` / `MISS` | dacă răspunsul a venit din cache sau de la un nod |
+| `X-Served-By` | `warehouse-1..3` | care nod l-a produs |
+
+> **Atenție la citirea lor:** un răspuns servit din cache păstrează `X-Served-By` al nodului care l-a produs *inițial*. Deci distribuția pe noduri văzută de client este deformată de HIT-uri. Distribuția reală se citește din `/proxy/stats`.
+
+### Endpoint-uri proprii
+
+| Cale | Ce întoarce |
+|---|---|
+| `GET /health` | starea proxy-ului, dacă Redis e conectat și lista nodurilor configurate |
+| `GET /proxy/stats` | `totalRequests`, `cacheHits`, `cacheMisses`, `requestsPerNode`, `sickNodes` |
+| `GET /proxy/clients` | clienții activi din Redis: `firstSeen`, `lastSeen`, `requests`, `lastPath`, `ttlSeconds` |
+
+`requestsPerNode` numără **încercări**, nu reușite: un nod care a eșuat apare cu cererea la activ, deși răspunsul a venit de la altul.
+
+Orice altă cale este redirecționată către warehouse.
+
+### Evidența clienților (Redis)
+
+Pentru fiecare client, proxy-ul ține în Redis un hash `client:{id}` cu primul și ultimul moment văzut, numărul de cereri și ultima cale, cu expirare după `ClientRecordTtl` (10 min). Clientul se identifică prin antetul `X-Client-Id`; dacă nu-l trimite, prin adresa IP.
+
+Redis este **opțional**: dacă `PAD_REDIS` nu e setată sau Redis nu răspunde, proxy-ul pornește și funcționează normal, iar `/proxy/clients` întoarce `{"error":"Redis unavailable"}`. Conexiunea are timeout-uri scurte special ca o problemă la Redis să nu devină indisponibilitatea proxy-ului.
+
+### Variabile de mediu
+
+| Variabilă | Implicit | Rol |
+|---|---|---|
+| `PAD_WAREHOUSE_NODES` | `http://localhost:5001,http://localhost:5002,http://localhost:5003` | lista nodurilor warehouse, separate prin virgulă |
+| `PAD_REDIS` | nesetată | adresa Redis (ex. `redis:6379`). Fără ea, evidența clienților e oprită |
+
+Portul proxy-ului este `Constants.ProxyPort` = `8080`. Timeout-ul unei cereri către un nod este `ProxyRequestTimeout` = 3 s.
+
+### Pornire
+
+```bash
+# Tot, în Docker: Cassandra + 3 warehouse + Redis + proxy
+docker compose up -d --build cassandra warehouse-1 warehouse-2 warehouse-3 redis proxy
+
+# Local, fără Docker: 3 noduri în memorie, apoi proxy peste ele
+PAD_PORT=5001 PAD_WAREHOUSE_NAME=warehouse-1 dotnet run --project src/warehouse &
+PAD_PORT=5002 PAD_WAREHOUSE_NAME=warehouse-2 dotnet run --project src/warehouse &
+PAD_PORT=5003 PAD_WAREHOUSE_NAME=warehouse-3 dotnet run --project src/warehouse &
+PAD_WAREHOUSE_NODES="http://localhost:5001,http://localhost:5002,http://localhost:5003" dotnet run --project src/proxy
+```
+
+Verificare rapidă — aceeași cerere de două ori trebuie să dea `MISS`, apoi `HIT`:
+
+```bash
+curl -i -H "Accept: application/json" "http://localhost:8080/employee/?id=1"   # X-Cache: MISS
+curl -i -H "Accept: application/json" "http://localhost:8080/employee/?id=1"   # X-Cache: HIT
+curl -s http://localhost:8080/proxy/stats
+```
+
+> **Fără Cassandra, datele nu sunt comune.** Cele 3 noduri în memorie au fiecare datele lui, deci round-robin-ul face ca același `GET` să dea `200` sau `404` după nodul nimerit. Pentru demonstrație se pornește cu Cassandra; varianta locală e pentru dezvoltare.
+
+## Client HTTP și load test
+
+### Client (`src/client`)
+
+Piesa de demonstrație: un meniu în consolă care vorbește **doar cu proxy-ul**, niciodată direct cu un warehouse. După fiecare cerere afișează codul de stare, durata, `X-Cache` și `X-Served-By`, apoi corpul formatat (JSON sau XML indentat).
+
+```bash
+dotnet run --project src/client
+dotnet run --project src/client -- --url http://localhost:8080 --format xml --id client-ana
+```
+
+| Opțiune | Implicit | Rol |
+|---|---|---|
+| `--url` | `PAD_PROXY_URL`, altfel `http://localhost:8080` | adresa proxy-ului |
+| `--format` | `json` | `json` sau `xml` (se schimbă și din meniu, opțiunea 3) |
+| `--id` | `client-<numele mașinii>` | antetul `X-Client-Id`, ca proxy-ul să te numere în Redis |
+| `--from` | `client@pad.local` | antetul `From`, ca în schema din enunț |
+
+Meniul: caută după id, listează cu offset/limit, schimbă formatul, pull-request („ce s-a schimbat de la un moment dat"), și `PUT` — ultimul e util ca să se vadă invalidarea cache-ului: după el, același `GET` redevine `MISS`.
+
+### Load test (`tools/loadtest`)
+
+```bash
+dotnet run --project tools/loadtest -- --clients 20 --requests 10 --path "/employee/?id=1" --accept json
+```
+
+Pornește `--clients` sarcini în paralel, fiecare trimite `--requests` cereri prin proxy, și raportează: durata, cereri/s, latențele (p50, p95, max), codurile de stare, raportul `HIT`/`MISS` și distribuția pe noduri.
+
+| Opțiune | Implicit |
+|---|---|
+| `--url` | `PAD_PROXY_URL`, altfel `http://localhost:8080` |
+| `--path` | `/employee/?id=1` |
+| `--clients` / `--requests` | `10` / `10` |
+| `--accept` | `json` (sau `xml`) |
+
+Rulările cerute — cache gol, cache cald, și cu un warehouse oprit în timpul rulării — sunt făcute și comentate în [`docs/evidence/lab3-loadtest.md`](docs/evidence/lab3-loadtest.md).
 
 ## Teste
 
@@ -440,6 +565,7 @@ Motivele din spatele alegerilor tehnice sunt în [`docs/decisions/`](docs/decisi
 | [001](docs/decisions/adr-001-tcp-si-framing.md) | Socket TCP brut, mesaje JSON pe linii | înlocuit de 002 |
 | [002](docs/decisions/adr-002-grpc-si-protobuf.md) | gRPC peste HTTP/2, contract protobuf | acceptat |
 | [003](docs/decisions/adr-003-load-balancing.md) | Failover pe client, cu listă ordonată de brokere | acceptat |
+| [004](docs/decisions/adr-004-proxy-si-caching.md) | Proxy scris de mână, cu cache pe răspunsurile `GET` | acceptat |
 
 ADR-001 descrie Partea 1 și se păstrează ca înregistrare istorică: arată de ce s-a ales atunci socketul brut. Nu se rescrie când codul se schimbă.
 

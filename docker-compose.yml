@@ -22,8 +22,10 @@ services:
   redis:
     image: redis:7-alpine
     container_name: pad-redis
-    ports:
-      - "6379:6379"
+    # Portul NU este publicat: Redis e folosit doar de proxy, din reteaua compose.
+    # Pentru inspectie manuala: docker compose exec redis redis-cli keys 'client:*'
+    expose:
+      - "6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -159,21 +161,13 @@ services:
       warehouse-3:
         condition: service_started
 
-  bridge:
-    build:
-      context: .
-      dockerfile: src/receivers/Dockerfile
-    image: pad-receiver
-    environment:
-      PAD_PROXY_URL: http://proxy:8080
-    command: ["--brokers", "broker1:4242,broker2:4243", "--name", "bridge", "--subscribe", "EmployeeChange", "--bridge"]
-    depends_on:
-      - broker1
-      - broker2
-      - proxy
-    restart: unless-stopped
-    volumes:
-      - ./logs:/app/logs
+  # Serviciul "bridge" (varianta B din docs/planning: sender -> broker -> bridge -> proxy -> warehouse)
+  # a fost scos din compose: receiver-ul nu accepta argumentul --bridge, pentru ca implementarea
+  # a fost revertita in 467b3f5. Cu el pornit, containerul cadea la fiecare pornire si, din cauza
+  # lui "restart: unless-stopped", se repornea in bucla.
+  #
+  # Varianta A (clientul face PUT direct prin proxy) acopera deja complet enuntul laboratorului.
+  # Cand --bridge exista in receiver, serviciul se adauga inapoi.
 
 volumes:
   cassandra-data:

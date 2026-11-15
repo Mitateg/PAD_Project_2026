@@ -8,6 +8,7 @@ Asa stii unde sa cauti fara sa ghicesti, si unde sa pui ceva nou.
 | [`decisions/`](decisions/) | De ce am ales ce am ales (ADR) | Nu se rescriu. O decizie depasita se marcheaza *inlocuita* si se scrie una noua. |
 | [`guides/`](guides/) | Cum se ruleaza si cum se opereaza | Se actualizeaza cand se schimba modul de rulare. |
 | [`planning/`](planning/) | Cine ce are de facut, pe laboratoare | Temporar. Dupa predare raman doar ca istoric. |
+| [`evidence/`](evidence/) | Masuratori si dovezi de rulare (comenzi + rezultate neprelucrate) | Se adauga rulari noi; cele vechi nu se rescriu, ca sa ramana comparabile. |
 
 Contractele **nu** sunt aici: stau in [`contracts/`](../contracts/), pentru ca de ele depinde codul
 tuturor componentelor, nu doar intelegerea lui.
@@ -19,6 +20,7 @@ tuturor componentelor, nu doar intelegerea lui.
 | [001](decisions/adr-001-tcp-si-framing.md) | Socket TCP brut, mesaje JSON pe linii | inlocuit de 002 |
 | [002](decisions/adr-002-grpc-si-protobuf.md) | gRPC peste HTTP/2, contract protobuf | acceptat |
 | [003](decisions/adr-003-load-balancing.md) | Failover pe client, cu lista ordonata de brokere | acceptat |
+| [004](decisions/adr-004-proxy-si-caching.md) | Proxy scris de mana, cu cache pe raspunsurile `GET` | acceptat |
 
 Un ADR inlocuit **se pastreaza asa cum a fost scris**. El explica de ce am ales atunci ce am ales,
 iar asta ramane adevarat chiar daca azi facem altfel. Daca l-am rescrie, am pierde exact informatia
@@ -29,6 +31,12 @@ pentru care exista.
 | Ghid | Despre |
 |---|---|
 | [docker-sender.md](guides/docker-sender.md) | Rularea sender-ului in Docker |
+
+## Dovezi
+
+| Document | Despre |
+|---|---|
+| [lab3-loadtest.md](evidence/lab3-loadtest.md) | Load test prin proxy: cache gol, cache cald, si un warehouse oprit in timpul rularii |
 
 ## Planificare
 

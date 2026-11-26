@@ -42,6 +42,7 @@ public sealed class TestWarehouse : IAsyncDisposable
         builder.Services.AddSingleton<EmployeeService>();
 
         WebApplication app = builder.Build();
+        app.UseCorrelationIdEcho();
         app.MapControllers();
         await app.StartAsync();
 

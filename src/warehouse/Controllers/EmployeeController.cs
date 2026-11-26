@@ -53,13 +53,18 @@ public class EmployeeController : ControllerBase
 
     // GET /update/employees/  cu antetul  If-Modified-Since: Sat, 29 Oct 2014 19:43:31 GMT
     //   ->  ce s-a schimbat dupa acel moment (metoda "pull-request" din enunt).
-    // Varianta alternativa, fara antet: GET /update/employees/?since=2026-11-09T10:00:00Z
+    // Daca nu s-a schimbat nimic, varianta cu antet raspunde 304 Not Modified (fara corp), ca la un GET conditionat.
+    // Varianta alternativa, fara antet: GET /update/employees/?since=2026-11-09T10:00:00Z  (200 cu lista, eventual goala)
     [HttpGet("/update/employees")]
     public async Task<ActionResult<List<Employee>>> Since(
         [FromHeader(Name = "If-Modified-Since")] string? ifModifiedSince,
         [FromQuery] DateTimeOffset? since)
     {
         IReadOnlyList<Employee> changed = await _service.ChangedSinceAsync(ifModifiedSince, since);
+
+        if (changed.Count == 0 && !string.IsNullOrWhiteSpace(ifModifiedSince))
+            return StatusCode(StatusCodes.Status304NotModified);
+
         return Ok(changed.ToList());
     }
 

@@ -12,6 +12,12 @@ namespace Pad.Warehouse.Data;
 /// </summary>
 public static class CassandraSession
 {
+    /// <summary>
+    /// Cat timp pastram evidenta schimbarilor (employee_changes). Dupa acest interval Cassandra sterge singura randurile,
+    /// deci tabelul nu creste nelimitat. Un pull-request cu o data mai veche primeste doar ce s-a pastrat.
+    /// </summary>
+    public const int ChangeRetentionDays = 7;
+
     private const int MaxAttempts = 30;
     private static readonly TimeSpan RetryPause = TimeSpan.FromSeconds(5);
 
@@ -22,10 +28,18 @@ public static class CassandraSession
         "CREATE TABLE IF NOT EXISTS pad.employees (" +
         "id int PRIMARY KEY, name text, position text, department text, updated_at timestamp)",
 
-        // Evidenta schimbarilor, pentru /update/employees/?since=. Un singur bucket ('all') e destul la scara laboratorului.
+        // Evidenta schimbarilor, pentru /update/employees/. Partitia este ziua (bucket = '2026-11-14'), nu una singura
+        // pentru tot timpul, si fiecare rand expira dupa ChangeRetentionDays: tabelul are marime marginita.
         "CREATE TABLE IF NOT EXISTS pad.employee_changes (" +
         "bucket text, changed_at timeuuid, employee_id int, PRIMARY KEY (bucket, changed_at)) " +
-        "WITH CLUSTERING ORDER BY (changed_at DESC)",
+        "WITH CLUSTERING ORDER BY (changed_at DESC) " +
+        $"AND default_time_to_live = {ChangeRetentionDays * 24 * 3600}",
+
+        // Marcaj "acest id a fost creat". INSERT ... IF NOT EXISTS aici decide atomic cine primeste 201, chiar daca
+        // doua PUT-uri pentru acelasi id nou ajung simultan (pe acelasi nod sau pe noduri diferite).
+        // Nu putem pune IF NOT EXISTS direct pe tabelul employees: Cassandra nu accepta USING TIMESTAMP pe
+        // instructiuni conditionale, iar last-write-wins depinde de USING TIMESTAMP.
+        "CREATE TABLE IF NOT EXISTS pad.employee_ids (id int PRIMARY KEY)",
     };
 
     /// <summary>

@@ -132,6 +132,9 @@ public class WarehouseClient
             case HttpStatusCode.NotFound:
                 Console.WriteLine("   (angajatul nu exista)");
                 return;
+            case HttpStatusCode.NotModified:
+                Console.WriteLine("   (nicio schimbare de la momentul dat)");
+                return;
             case HttpStatusCode.NotAcceptable:
                 Console.WriteLine("   (formatul cerut nu este suportat de warehouse)");
                 return;
